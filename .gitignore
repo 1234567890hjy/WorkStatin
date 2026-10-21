@@ -1,0 +1,50 @@
+# ---- 隔离工作区 ----
+# 本目录下的 worktree 一律不进版本库
+.worktrees/
+worktrees/
+
+# ---- 操作系统 ----
+Thumbs.db
+desktop.ini
+.DS_Store
+
+# ---- 编辑器 ----
+.idea/
+.vscode/
+*.iml
+*.swp
+*~
+
+# ---- 构建产物 ----
+build/
+dist/
+out/
+target/
+bin/
+obj/
+*.class
+*.jar
+*.apk
+*.aab
+
+# ---- 依赖 ----
+node_modules/
+.pnpm-store/
+vendor/
+
+# ---- 日志与临时文件 ----
+*.log
+*.tmp
+tmp/
+temp/
+.cache/
+
+# ---- 环境与密钥 ----
+.env
+.env.*
+!.env.example
+*.pem
+*.key
+*.keystore
+*.jks
+local.properties
