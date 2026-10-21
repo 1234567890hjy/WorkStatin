@@ -1,0 +1,23 @@
+{
+  "name": "workstation-me",
+  "private": true,
+  "version": "0.1.0",
+  "description": "个人工作台 —— Cloudflare Pages + Workers + D1 + R2",
+  "workspaces": [
+    "apps/worker",
+    "apps/web"
+  ],
+  "scripts": {
+    "dev:worker": "npm run dev -w @ws/worker",
+    "dev:web": "npm run dev -w @ws/web",
+    "build": "npm run build -w @ws/web",
+    "typecheck": "npm run typecheck -w @ws/worker && npm run typecheck -w @ws/web",
+    "test": "vitest run",
+    "test:watch": "vitest"
+  },
+  "devDependencies": {
+    "@types/node": "^26.6.5",
+    "typescript": "^5.6.3",
+    "vitest": "^2.1.8"
+  }
+}

@@ -31,6 +31,15 @@ obj/
 node_modules/
 .pnpm-store/
 vendor/
+.npm-cache/
+
+# ---- Cloudflare ----
+.wrangler/
+.dev.vars
+.dev.vars.*
+
+# ---- 测试覆盖 ----
+coverage/
 
 # ---- 日志与临时文件 ----
 *.log

@@ -1,0 +1,19 @@
+name = "workstation-me"
+main = "src/index.ts"
+compatibility_date = "2024-12-01"
+compatibility_flags = ["nodejs_compat"]
+
+# 本地开发时，前端在 5173，后端在 8787
+[vars]
+ENVIRONMENT = "development"
+
+[[d1_databases]]
+binding = "DB"
+database_name = "workstation-db"
+database_id = "REPLACE_WITH_YOUR_D1_ID"
+migrations_dir = "migrations"
+
+# P2 才启用 R2 备份
+# [[r2_buckets]]
+# binding = "BACKUP"
+# bucket_name = "workstation-backup"
