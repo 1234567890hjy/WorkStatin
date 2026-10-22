@@ -28,7 +28,9 @@ class FakeD1 {
   ];
   txns: Row[] = [];
   summary: Row[] = [];
-  seq = { txn: 0 };
+  workouts: Row[] = [];
+  videos: Row[] = [];
+  seq = { txn: 0, workout: 0, video: 0 };
 
   prepare(sql: string) {
     return new Stmt(this, sql);
@@ -129,8 +131,106 @@ class Stmt {
         results: [...map].map(([type, v]) => ({ type, total: v.total, n: v.n })) as T[],
       };
     }
-    if (sql.includes('FROM workout')) {
-      return { results: [{ minutes: 0, n: 0 }] as T[] };
+    // ---- P1: workout ----
+    // 精确按 id 查必须最先匹配，否则会被下面的 ORDER BY 分支抢走
+    if (sql.startsWith('SELECT * FROM workout WHERE id = ?')) {
+      return { results: this.db.workouts.filter((w) => w.id === a[0]) as T[] };
+    }
+    if (sql.startsWith('SELECT id FROM workout WHERE id = ?')) {
+      return {
+        results: this.db.workouts.filter((w) => w.id === a[0] && !w.deleted_at) as T[],
+      };
+    }
+    if (sql.includes('FROM workout') && sql.includes('SUM(duration_min)') && sql.includes('date(?')) {
+      const cutoff = String(a[0]);
+      const days = Number(String(a[1]).replace(/[^0-9]/g, '')) || 0;
+      const from = new Date(new Date(cutoff + 'T00:00:00Z').getTime() - days * 86400000)
+        .toISOString()
+        .slice(0, 10);
+      const inRange = this.db.workouts.filter(
+        (w) => !w.deleted_at && String(w.occurred_day) >= from && String(w.occurred_day) <= cutoff,
+      );
+      return {
+        results: [
+          {
+            minutes: inRange.reduce((s, w) => s + Number(w.duration_min), 0),
+            distance_m: inRange.reduce((s, w) => s + Number(w.distance_m ?? 0), 0),
+            calories: inRange.reduce((s, w) => s + Number(w.calories ?? 0), 0),
+            count: inRange.length,
+          },
+        ] as T[],
+      };
+    }
+    if (sql.includes('FROM workout') && sql.includes('GROUP BY occurred_day')) {
+      const cutoff = String(a[0]);
+      const days = Number(String(a[1]).replace(/[^0-9]/g, '')) || 0;
+      const from = new Date(new Date(cutoff + 'T00:00:00Z').getTime() - days * 86400000)
+        .toISOString()
+        .slice(0, 10);
+      const map = new Map<string, { minutes: number; n: number }>();
+      for (const w of this.db.workouts) {
+        if (w.deleted_at) continue;
+        const d = String(w.occurred_day);
+        if (d < from || d > cutoff) continue;
+        const cur = map.get(d) ?? { minutes: 0, n: 0 };
+        cur.minutes += Number(w.duration_min);
+        cur.n += 1;
+        map.set(d, cur);
+      }
+      return {
+        results: [...map]
+          .sort(([x], [y]) => x.localeCompare(y))
+          .map(([occurred_day, v]) => ({ occurred_day, minutes: v.minutes, n: v.n })) as T[],
+      };
+    }
+    if (sql.includes('FROM workout') && sql.includes('ORDER BY occurred_at DESC')) {
+      const items = this.db.workouts
+        .filter((w) => !w.deleted_at)
+        .sort((x, y) => String(y.occurred_at).localeCompare(String(x.occurred_at)));
+      const limit = Number(a[a.length - 1]) || 50;
+      return { results: items.slice(0, limit) as T[] };
+    }
+    // ---- P1: video ----
+    if (sql.includes('FROM video_item') && sql.includes('has_transcript')) {
+      const items = this.db.videos
+        .filter((v) => !v.deleted_at)
+        .map((v) => ({
+          ...v,
+          has_transcript: v.transcript ? 1 : 0,
+          has_summary: v.summary ? 1 : 0,
+        }));
+      return { results: items as T[] };
+    }
+    if (sql.includes('FROM video_item') && sql.includes('AS pending')) {
+      const alive = this.db.videos.filter((v) => !v.deleted_at);
+      return {
+        results: [
+          {
+            pending: alive.filter((v) => v.status === 'draft' || v.status === 'transcribed').length,
+            done: alive.filter((v) => v.status === 'summarized' || v.status === 'archived').length,
+          },
+        ] as T[],
+      };
+    }
+    if (sql.startsWith('SELECT * FROM video_item WHERE id = ?')) {
+      return { results: this.db.videos.filter((v) => v.id === a[0]) as T[] };
+    }
+    if (sql.startsWith('SELECT id FROM video_item WHERE id = ?')) {
+      return {
+        results: this.db.videos.filter((v) => v.id === a[0] && !v.deleted_at) as T[],
+      };
+    }
+    if (sql.includes('FROM video_item') && sql.includes('LIKE')) {
+      const q = String(a[0]).replace(/%/g, '');
+      const items = this.db.videos.filter(
+        (v) =>
+          !v.deleted_at &&
+          (String(v.title ?? '').includes(q) ||
+            String(v.summary ?? '').includes(q) ||
+            String(v.tags ?? '').includes(q) ||
+            String(v.transcript ?? '').includes(q)),
+      );
+      return { results: items as T[] };
     }
     if (sql.includes('SELECT COUNT(*) AS n FROM task')) {
       return { results: [{ n: 0 }] as T[] };
@@ -236,6 +336,72 @@ class Stmt {
           txn_count: v.n,
         });
       }
+      return { meta: { last_row_id: 0, changes: 1 } };
+    }
+    // ---- P1: workout 写入 ----
+    if (sql.startsWith('INSERT INTO workout')) {
+      const id = ++this.db.seq.workout;
+      this.db.workouts.push({
+        id,
+        kind: a[0],
+        duration_min: a[1],
+        distance_m: a[2],
+        calories: a[3],
+        note: a[4],
+        occurred_at: a[5],
+        occurred_day: a[6],
+        deleted_at: null,
+      });
+      return { meta: { last_row_id: id, changes: 1 } };
+    }
+    if (sql.startsWith('UPDATE workout SET deleted_at')) {
+      const w = this.db.workouts.find((x) => x.id === a[0]);
+      if (w) w.deleted_at = 'now';
+      return { meta: { last_row_id: 0, changes: 1 } };
+    }
+    // ---- P1: video 写入 ----
+    if (sql.startsWith('INSERT INTO video_item')) {
+      const id = ++this.db.seq.video;
+      this.db.videos.push({
+        id,
+        url: a[0],
+        platform: a[1],
+        title: a[2],
+        author: a[3],
+        duration_sec: a[4],
+        status: 'draft',
+        tags: null,
+        transcript: null,
+        summary: null,
+        deleted_at: null,
+      });
+      return { meta: { last_row_id: id, changes: 1 } };
+    }
+    if (sql.startsWith('UPDATE video_item SET transcript')) {
+      const v = this.db.videos.find((x) => x.id === a[1]);
+      if (v) {
+        v.transcript = a[0];
+        v.status = 'transcribed';
+      }
+      return { meta: { last_row_id: 0, changes: 1 } };
+    }
+    if (sql.startsWith('UPDATE video_item SET summary')) {
+      const v = this.db.videos.find((x) => x.id === a[2]);
+      if (v) {
+        v.summary = a[0];
+        if (a[1] !== null) v.tags = a[1];
+        v.status = 'summarized';
+      }
+      return { meta: { last_row_id: 0, changes: 1 } };
+    }
+    if (sql.startsWith('UPDATE video_item SET status')) {
+      const v = this.db.videos.find((x) => x.id === a[0]);
+      if (v) v.status = 'archived';
+      return { meta: { last_row_id: 0, changes: 1 } };
+    }
+    if (sql.startsWith('UPDATE video_item SET deleted_at')) {
+      const v = this.db.videos.find((x) => x.id === a[0]);
+      if (v) v.deleted_at = 'now';
       return { meta: { last_row_id: 0, changes: 1 } };
     }
     return { meta: { last_row_id: 0, changes: 0 } };
@@ -491,6 +657,202 @@ await t('登出后 token 失效', async () => {
 await t('未知路由 404', async () => {
   const r = await call('/api/nope');
   assert.equal(r.status, 404);
+});
+
+// ================= P1 =================
+// 重新登录（前面的登出用例让 token 失效了）
+await t('P1: 重新登录', async () => {
+  const r = await call('/api/auth/login', {
+    method: 'POST',
+    body: JSON.stringify({ username: 'owner', password: 'password123' }),
+  });
+  assert.equal(r.body.ok, true);
+  token = r.body.data.token;
+});
+
+// ---- 运动 ----
+await t('P1 运动: 非法类型被拒绝', async () => {
+  const r = await call('/api/workouts', {
+    method: 'POST',
+    body: JSON.stringify({ kind: 'bogus', duration_min: 30 }),
+  });
+  assert.equal(r.body.error.code, 'INVALID_KIND');
+});
+
+await t('P1 运动: 时长非法被拒绝', async () => {
+  const r = await call('/api/workouts', {
+    method: 'POST',
+    body: JSON.stringify({ kind: 'run', duration_min: 0 }),
+  });
+  assert.equal(r.body.error.code, 'INVALID_DURATION');
+});
+
+await t('P1 运动: 时长超上限被拒绝', async () => {
+  const r = await call('/api/workouts', {
+    method: 'POST',
+    body: JSON.stringify({ kind: 'run', duration_min: 2000 }),
+  });
+  assert.equal(r.body.error.code, 'INVALID_DURATION');
+});
+
+await t('P1 运动: 正常录入', async () => {
+  const r = await call('/api/workouts', {
+    method: 'POST',
+    body: JSON.stringify({ kind: 'run', duration_min: 35, distance_m: 5200, calories: 320 }),
+  });
+  assert.equal(r.body.ok, true);
+  assert.equal(r.body.data.duration_min, 35);
+  assert.equal(r.body.data.distance_m, 5200);
+});
+
+await t('P1 运动: 再录一条', async () => {
+  const r = await call('/api/workouts', {
+    method: 'POST',
+    body: JSON.stringify({ kind: 'gym', duration_min: 45 }),
+  });
+  assert.equal(r.body.ok, true);
+});
+
+await t('P1 运动: 列表可读', async () => {
+  const r = await call('/api/workouts');
+  assert.equal(r.body.data.items.length, 2);
+});
+
+await t('P1 运动: 近 7 天统计', async () => {
+  const r = await call('/api/workouts/stats?days=7');
+  assert.equal(r.body.data.minutes, 80);
+  assert.equal(r.body.data.distance_m, 5200);
+  assert.equal(r.body.data.calories, 320);
+  assert.equal(r.body.data.count, 2);
+  assert.ok(Array.isArray(r.body.data.by_day));
+});
+
+await t('P1 运动: 软删除生效', async () => {
+  const list = await call('/api/workouts');
+  const id = list.body.data.items[0].id;
+  const d = await call(`/api/workouts/${id}`, { method: 'DELETE' });
+  assert.equal(d.body.ok, true);
+  const after = await call('/api/workouts');
+  assert.equal(after.body.data.items.length, 1);
+});
+
+await t('P1 运动: 删除后统计同步', async () => {
+  const r = await call('/api/workouts/stats?days=7');
+  assert.equal(r.body.data.count, 1);
+});
+
+// ---- 视频 ----
+await t('P1 视频: 非法 URL 被拒绝', async () => {
+  const r = await call('/api/videos', {
+    method: 'POST',
+    body: JSON.stringify({ url: 'not-a-url' }),
+  });
+  assert.equal(r.body.error.code, 'INVALID_URL');
+});
+
+await t('P1 视频: 添加抖音链接（无元数据）', async () => {
+  const r = await call('/api/videos', {
+    method: 'POST',
+    body: JSON.stringify({ url: 'https://www.douyin.com/video/123456' }),
+  });
+  assert.equal(r.body.ok, true);
+  assert.equal(r.body.data.platform, 'douyin');
+  assert.equal(r.body.data.status, 'draft');
+});
+
+await t('P1 视频: 添加 B 站链接（自动抓元数据）', async () => {
+  const r = await call('/api/videos', {
+    method: 'POST',
+    body: JSON.stringify({ url: 'https://www.bilibili.com/video/BV1xx411c7mD', title: '手填标题' }),
+  });
+  assert.equal(r.body.ok, true);
+  assert.equal(r.body.data.platform, 'bilibili');
+  // 联网可达时用真实标题覆盖手填；不可达时保留手填 —— 两者都算通过
+  assert.ok(r.body.data.title, '标题不应为空');
+});
+
+await t('P1 视频: 列表带 has_transcript 标记', async () => {
+  const r = await call('/api/videos');
+  assert.equal(r.body.data.items.length, 2);
+  assert.equal(r.body.data.items[0].has_transcript, 0);
+});
+
+await t('P1 视频: 空转写稿被拒绝', async () => {
+  const list = await call('/api/videos');
+  const id = list.body.data.items[0].id;
+  const r = await call(`/api/videos/${id}/transcript`, {
+    method: 'PUT',
+    body: JSON.stringify({ transcript: '   ' }),
+  });
+  assert.equal(r.body.error.code, 'EMPTY_TRANSCRIPT');
+});
+
+await t('P1 视频: 保存转写稿', async () => {
+  const list = await call('/api/videos');
+  const id = list.body.data.items[0].id;
+  const r = await call(`/api/videos/${id}/transcript`, {
+    method: 'PUT',
+    body: JSON.stringify({ transcript: '这是视频的转写稿内容，讲了一些要点。' }),
+  });
+  assert.equal(r.body.ok, true);
+  assert.equal(r.body.data.status, 'transcribed');
+});
+
+await t('P1 视频: 保存摘要并打标签', async () => {
+  const list = await call('/api/videos');
+  const id = list.body.data.items[0].id;
+  const r = await call(`/api/videos/${id}/summary`, {
+    method: 'PUT',
+    body: JSON.stringify({ summary: '## 一句话总结\n测试摘要', tags: '测试,学习' }),
+  });
+  assert.equal(r.body.ok, true);
+  assert.equal(r.body.data.status, 'summarized');
+});
+
+await t('P1 视频: 搜索命中摘要', async () => {
+  const r = await call('/api/videos/search?q=测试摘要');
+  assert.equal(r.body.ok, true);
+  assert.equal(r.body.data.items.length, 1);
+});
+
+await t('P1 视频: 搜索无结果', async () => {
+  const r = await call('/api/videos/search?q=不存在的关键词xyz');
+  assert.equal(r.body.data.items.length, 0);
+});
+
+await t('P1 视频: 归档', async () => {
+  const list = await call('/api/videos');
+  const id = list.body.data.items[0].id;
+  const r = await call(`/api/videos/${id}/archive`, { method: 'POST' });
+  assert.equal(r.body.data.status, 'archived');
+});
+
+// ---- LLM ----
+await t('P1 LLM: 未配置密钥时明确报错', async () => {
+  const r = await call('/api/llm/summarize', {
+    method: 'POST',
+    body: JSON.stringify({ transcript: '一些转写内容' }),
+  });
+  assert.equal(r.status, 503);
+  assert.equal(r.body.error.code, 'LLM_NOT_CONFIGURED');
+});
+
+// ---- 天气 ----
+await t('P1 天气: 未登录被拒', async () => {
+  const saved = token;
+  token = '';
+  const r = await call('/api/weather');
+  assert.equal(r.status, 401);
+  token = saved;
+});
+
+// ---- Dashboard 集成 ----
+await t('P1 Dashboard: 含 P1 字段', async () => {
+  const r = await call('/api/dashboard');
+  assert.equal(r.body.ok, true);
+  assert.ok('video_stats' in r.body.data);
+  assert.ok('recent_workouts' in r.body.data);
+  assert.ok(Array.isArray(r.body.data.recent_workouts));
 });
 
 // ---------- 汇总 ----------
