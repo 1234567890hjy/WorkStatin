@@ -57,3 +57,7 @@ temp/
 *.keystore
 *.jks
 local.properties
+
+# ---- 本地 wrangler 运行状态 ----
+.wrangler-state/
+.tmp/
