@@ -3,9 +3,19 @@ main = "src/index.ts"
 compatibility_date = "2024-12-01"
 compatibility_flags = ["nodejs_compat"]
 
+# ---- 静态资源（前端构建产物）----
+# 用 Workers 直接托管前端，而不是 Pages：
+# 一次部署、前后端天然同源，前端相对路径 /api 才能直接工作。
+# SPA 路由：找不到静态文件时回退到 index.html，由前端 React Router 接管。
+[assets]
+directory = "../web/dist"
+binding = "ASSETS"
+not_found_handling = "single-page-application"
+run_worker_first = ["/api/*"]
+
 # 本地开发时，前端在 5173，后端在 8787
 [vars]
-ENVIRONMENT = "development"
+ENVIRONMENT = "production"
 WEATHER_LAT = "39.9042"
 WEATHER_LON = "116.4074"
 WEATHER_LABEL = "北京"
@@ -17,7 +27,7 @@ WEATHER_LABEL = "北京"
 [[d1_databases]]
 binding = "DB"
 database_name = "workstation-db"
-database_id = "REPLACE_WITH_YOUR_D1_ID"
+database_id = "ea9195ab-89c4-4511-b443-411c8d83a081"
 migrations_dir = "migrations"
 
 # P2 才启用 R2 备份
