@@ -66,6 +66,26 @@ dashboardRoutes.get('/', async (c) => {
   const dRows = todayStats.results ?? [];
   const dayTotal = (t: string) => dRows.find((r) => r.type === t)?.total ?? 0;
 
+  // ---- P1 附加聚合（失败不影响主数据）----
+  const [videoCounts, workoutRecent] = await Promise.all([
+    c.env.DB.prepare(
+      `SELECT
+         SUM(CASE WHEN status IN ('draft','transcribed') THEN 1 ELSE 0 END) AS pending,
+         SUM(CASE WHEN status IN ('summarized','archived') THEN 1 ELSE 0 END) AS done
+       FROM video_item WHERE deleted_at IS NULL`,
+    )
+      .first<{ pending: number | null; done: number | null }>()
+      .catch(() => null),
+
+    c.env.DB.prepare(
+      `SELECT kind, duration_min, distance_m, occurred_day
+       FROM workout WHERE deleted_at IS NULL
+       ORDER BY occurred_at DESC, id DESC LIMIT 3`,
+    )
+      .all()
+      .catch(() => ({ results: [] as unknown[] })),
+  ]);
+
   return ok({
     month,
     day,
@@ -83,5 +103,11 @@ dashboardRoutes.get('/', async (c) => {
     workout_7d: { minutes: workout7?.minutes ?? 0, count: workout7?.n ?? 0 },
     open_tasks: taskOpen?.n ?? 0,
     recent_txns: recent.results ?? [],
+    // P1
+    video_stats: {
+      pending: videoCounts?.pending ?? 0,
+      done: videoCounts?.done ?? 0,
+    },
+    recent_workouts: workoutRecent?.results ?? [],
   });
 });

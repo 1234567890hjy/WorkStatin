@@ -5,6 +5,14 @@ export interface Env {
   BACKUP_KEY?: string;
   /** 环境标识 */
   ENVIRONMENT?: string;
+
+  // ---- P1 ----
+  /** DeepSeek API 密钥；未配置时摘要功能降级为人工填写 */
+  DEEPSEEK_API_KEY?: string;
+  /** 天气坐标与显示名（可选，默认北京） */
+  WEATHER_LAT?: string;
+  WEATHER_LON?: string;
+  WEATHER_LABEL?: string;
 }
 
 export interface UserRow {

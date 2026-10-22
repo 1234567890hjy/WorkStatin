@@ -104,6 +104,9 @@ export interface Dashboard {
   workout_7d: { minutes: number; count: number };
   open_tasks: number;
   recent_txns: Txn[];
+  // P1
+  video_stats: { pending: number; done: number };
+  recent_workouts: Workout[];
 }
 
 export interface ShareParse {
@@ -118,4 +121,73 @@ export interface ShareParse {
     merchant: string;
     occurred_at: string;
   };
+}
+
+// ---------- P1 ----------
+
+export type WorkoutKind = 'run' | 'walk' | 'cycle' | 'gym' | 'swim' | 'other';
+
+export interface Workout {
+  id: number;
+  kind: WorkoutKind;
+  duration_min: number;
+  distance_m: number | null;
+  calories: number | null;
+  note: string | null;
+  occurred_at: string;
+  occurred_day: string;
+}
+
+export interface WorkoutStats {
+  days: number;
+  end: string;
+  minutes: number;
+  distance_m: number;
+  calories: number;
+  count: number;
+  by_day: { occurred_day: string; minutes: number; n: number }[];
+}
+
+export interface Weather {
+  available: boolean;
+  reason?: string;
+  label: string;
+  current?: {
+    temp: number | null;
+    feels_like: number | null;
+    humidity: number | null;
+    wind: number | null;
+    code: number;
+    text: string;
+    icon: string;
+  };
+  daily?: {
+    max: number;
+    min: number | null;
+    code: number;
+    text: string;
+    icon: string;
+    rain_prob: number | null;
+  }[];
+  updated_at?: string;
+  cached?: boolean;
+}
+
+export type VideoStatus = 'draft' | 'transcribed' | 'summarized' | 'archived';
+
+export interface VideoItem {
+  id: number;
+  url: string;
+  platform: string | null;
+  title: string | null;
+  author: string | null;
+  duration_sec: number | null;
+  status: VideoStatus;
+  tags: string | null;
+  transcript?: string | null;
+  summary?: string | null;
+  has_transcript?: number;
+  has_summary?: number;
+  created_at: string;
+  updated_at: string;
 }

@@ -9,7 +9,7 @@ Cloudflare Pages + Workers + D1 + R2 · Hono (TypeScript) · React + Vite + Tail
 **为什么不用 FastAPI + PostgreSQL + Docker**：固定成本从 ¥30~60/月降到 0；
 手机「分享导入」要求 7×24 公网 HTTPS，NAS 做不到。
 
-## 当前进度：P0 完成
+## 当前进度：P0 + P1 完成
 
 | 模块 | 状态 |
 |---|---|
@@ -18,14 +18,18 @@ Cloudflare Pages + Workers + D1 + R2 · Hono (TypeScript) · React + Vite + Tail
 | Dashboard 概览 | ✅ 可用 |
 | 认证与会话 | ✅ 可用 |
 | 净资产（手动维护） | ✅ 可用 |
-| 运动 / 天气 / 视频 AI / 计划任务 / 日常管理 | ⬜ P1/P2 |
+| 运动记录 | ✅ 可用 |
+| 天气卡片 | ✅ 可用 |
+| 视频 AI 学习 | ✅ 可用 |
+| 计划任务 / 日常管理 / 备份演练 | ⬜ P2 |
 
 ## 快速开始
 
 ```bash
 npm install --ignore-scripts     # 沙箱环境必须加 --ignore-scripts
 npx tsc -p tsconfig.worker.json  # 类型检查
-npx vitest run                   # 单元测试
+npx vitest run                   # 48 项单元测试
+node --experimental-strip-types apps/worker/test/smoke.ts   # 50 项接口冒烟
 ```
 
 详见 [开发说明](docs/开发说明.md) 与 [方案 v2](docs/个人工作台-方案v2.md)。

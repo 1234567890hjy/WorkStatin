@@ -1,8 +1,9 @@
 import { useEffect, useState } from 'react';
 import { Link } from 'react-router-dom';
-import { api, type Dashboard, type Txn } from '../api';
+import { api, type Dashboard, type Txn, type Workout } from '../api';
 import { formatYuanGrouped } from '../format';
 import type { AppData } from '../App';
+import WeatherCard from '../components/WeatherCard';
 
 export default function DashboardPage({ data }: { data: AppData }) {
   const [d, setD] = useState<Dashboard | null>(null);
@@ -61,15 +62,46 @@ export default function DashboardPage({ data }: { data: AppData }) {
 
       {/* 卡片区 */}
       <section className="grid grid-cols-2 gap-3">
-        <Card title="净资产" value={`¥${formatYuanGrouped(d.net_worth_cents)}`} hint="手动维护" />
-        <Card
-          title="近 7 天运动"
-          value={`${d.workout_7d.minutes} 分钟`}
-          hint={`${d.workout_7d.count} 次`}
-        />
-        <Card title="待办任务" value={`${d.open_tasks}`} hint="未完成" />
-        <Card title="天气" value="—" hint="P1 接入" />
+        <Link to="/settings" className="contents">
+          <Card
+            title="净资产"
+            value={`¥${formatYuanGrouped(d.net_worth_cents)}`}
+            hint="点击维护余额"
+          />
+        </Link>
+        <Link to="/workout" className="contents">
+          <Card
+            title="近 7 天运动"
+            value={`${d.workout_7d.minutes} 分钟`}
+            hint={`${d.workout_7d.count} 次`}
+          />
+        </Link>
+        <WeatherCard />
+        <Link to="/video" className="contents">
+          <Card
+            title="视频学习"
+            value={`${d.video_stats?.pending ?? 0} 待处理`}
+            hint={`已摘要 ${d.video_stats?.done ?? 0} 条`}
+          />
+        </Link>
       </section>
+
+      {/* 最近运动 */}
+      {d.recent_workouts && d.recent_workouts.length > 0 && (
+        <section className="rounded-2xl bg-white p-4 shadow-sm">
+          <h2 className="mb-2 text-sm font-semibold text-ink-900">最近运动</h2>
+          <ul className="divide-y divide-ink-100">
+            {d.recent_workouts.map((w: Workout) => (
+              <li key={w.id} className="flex items-center justify-between py-2">
+                <span className="text-sm text-ink-900">
+                  {workoutLabel(w.kind)} · {w.duration_min} 分钟
+                </span>
+                <span className="text-xs text-ink-500">{w.occurred_day}</span>
+              </li>
+            ))}
+          </ul>
+        </section>
+      )}
 
       {/* 最近流水 */}
       <section className="rounded-2xl bg-white p-4 shadow-sm">
@@ -128,4 +160,16 @@ function Centered({ children }: { children: React.ReactNode }) {
   return (
     <div className="flex h-64 items-center justify-center text-sm text-ink-500">{children}</div>
   );
+}
+
+function workoutLabel(kind: string): string {
+  const map: Record<string, string> = {
+    run: '🏃 跑步',
+    walk: '🚶 快走',
+    cycle: '🚴 骑行',
+    gym: '🏋️ 健身',
+    swim: '🏊 游泳',
+    other: '🤸 其他',
+  };
+  return map[kind] ?? kind;
 }
