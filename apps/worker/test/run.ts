@@ -9,6 +9,9 @@ import assert from 'node:assert/strict';
 import { parseYuanToCents, formatCents, formatCentsGrouped } from '../src/domain/money.ts';
 import { parseShareText } from '../src/domain/share-parse.ts';
 import { normalizeOccurred, isValidDay, isValidMonth, expiryFromNow } from '../src/domain/dates.ts';
+import { validateTask } from '../src/domain/task.ts';
+import { validateRoutine, periodRange, currentStreak } from '../src/domain/routine.ts';
+import { validateAccountCreate, validateCategory } from '../src/domain/meta.ts';
 
 let passed = 0;
 let failed = 0;
@@ -208,6 +211,307 @@ test('dates: expiryFromNow', () => {
   assert.ok(t > Date.now());
   const expected = Date.now() + 30 * 24 * 3600 * 1000;
   assert.ok(Math.abs(t - expected) < 60_000);
+});
+
+// ============ task ============
+function okValue(b: Parameters<typeof validateTask>[0]) {
+  const r = validateTask(b);
+  if ('error' in r) throw new Error(`期望通过，却报错 ${r.error.code}`);
+  return r.value;
+}
+
+function errCode(b: Parameters<typeof validateTask>[0]) {
+  const r = validateTask(b);
+  if (!('error' in r)) throw new Error('期望报错，却通过了');
+  return r.error.code;
+}
+
+test('task: 最小输入通过，默认值与中优先级', () => {
+  const v = okValue({ title: '写周报' });
+  assert.equal(v.title, '写周报');
+  assert.equal(v.status, 'todo');
+  assert.equal(v.priority, 2);
+  assert.equal(v.dueDay, null);
+  assert.equal(v.detail, null);
+});
+
+test('task: 标题去除首尾空格', () => {
+  assert.equal(okValue({ title: '  买菜  ' }).title, '买菜');
+});
+
+test('task: 空标题被拒', () => {
+  assert.equal(errCode({ title: '' }), 'EMPTY_TITLE');
+  assert.equal(errCode({ title: '   ' }), 'EMPTY_TITLE');
+  assert.equal(errCode({}), 'EMPTY_TITLE');
+  assert.equal(errCode({ title: undefined }), 'EMPTY_TITLE');
+});
+
+test('task: 超长标题被拒', () => {
+  assert.equal(errCode({ title: 'x'.repeat(121) }), 'TITLE_TOO_LONG');
+});
+
+test('task: 120 字标题刚好通过', () => {
+  assert.equal(okValue({ title: 'x'.repeat(120) }).title.length, 120);
+});
+
+test('task: 非法状态被拒', () => {
+  assert.equal(errCode({ title: 'x', status: 'bogus' }), 'INVALID_STATUS');
+  assert.equal(errCode({ title: 'x', status: 'TODO' }), 'INVALID_STATUS');
+});
+
+test('task: 四个合法状态都通过', () => {
+  for (const s of ['todo', 'doing', 'done', 'dropped'] as const) {
+    assert.equal(okValue({ title: 'x', status: s }).status, s);
+  }
+});
+
+test('task: 非法优先级被拒', () => {
+  assert.equal(errCode({ title: 'x', priority: 0 }), 'INVALID_PRIORITY');
+  assert.equal(errCode({ title: 'x', priority: 4 }), 'INVALID_PRIORITY');
+  assert.equal(errCode({ title: 'x', priority: 1.5 }), 'INVALID_PRIORITY');
+});
+
+test('task: 合法优先级都通过', () => {
+  assert.equal(okValue({ title: 'x', priority: 1 }).priority, 1);
+  assert.equal(okValue({ title: 'x', priority: 2 }).priority, 2);
+  assert.equal(okValue({ title: 'x', priority: 3 }).priority, 3);
+});
+
+test('task: 非法截止日被拒', () => {
+  assert.equal(errCode({ title: 'x', due_day: '2026/01/01' }), 'INVALID_DUE_DAY');
+  assert.equal(errCode({ title: 'x', due_day: '2026-1-1' }), 'INVALID_DUE_DAY');
+  assert.equal(errCode({ title: 'x', due_day: '2026-13-01' }), 'INVALID_DUE_DAY');
+  assert.equal(errCode({ title: 'x', due_day: '2025-02-29' }), 'INVALID_DUE_DAY');
+  assert.equal(errCode({ title: 'x', due_day: 'abc' }), 'INVALID_DUE_DAY');
+});
+
+test('task: 合法截止日通过（含闰日）', () => {
+  assert.equal(okValue({ title: 'x', due_day: '2026-10-24' }).dueDay, '2026-10-24');
+  assert.equal(okValue({ title: 'x', due_day: '2024-02-29' }).dueDay, '2024-02-29');
+});
+
+test('task: null 与空串表示清除截止日', () => {
+  assert.equal(okValue({ title: 'x', due_day: null }).dueDay, null);
+  assert.equal(okValue({ title: 'x', due_day: '' }).dueDay, null);
+  assert.equal(okValue({ title: 'x' }).dueDay, null);
+});
+
+test('task: 备注为空串归一为 null', () => {
+  assert.equal(okValue({ title: 'x', detail: '   ' }).detail, null);
+  assert.equal(okValue({ title: 'x', detail: '有内容' }).detail, '有内容');
+});
+
+test('task: 超长备注被截断而非报错', () => {
+  const v = okValue({ title: 'x', detail: 'y'.repeat(5000) });
+  assert.equal(v.detail?.length, 2000);
+});
+
+// ============ routine ============
+function routineOk(b: Parameters<typeof validateRoutine>[0]) {
+  const r = validateRoutine(b);
+  if ('error' in r) throw new Error(`期望通过，却报错 ${r.error.code}`);
+  return r.value;
+}
+
+function routineErr(b: Parameters<typeof validateRoutine>[0]) {
+  const r = validateRoutine(b);
+  if (!('error' in r)) throw new Error('期望报错，却通过了');
+  return r.error.code;
+}
+
+test('routine: 最小输入通过，默认每天一次', () => {
+  const v = routineOk({ name: '读书' });
+  assert.equal(v.name, '读书');
+  assert.equal(v.cadence, 'daily');
+  assert.equal(v.targetPerPeriod, 1);
+});
+
+test('routine: 空名称被拒', () => {
+  assert.equal(routineErr({ name: '' }), 'EMPTY_NAME');
+  assert.equal(routineErr({ name: '  ' }), 'EMPTY_NAME');
+  assert.equal(routineErr({}), 'EMPTY_NAME');
+});
+
+test('routine: 超长名称被拒', () => {
+  assert.equal(routineErr({ name: 'x'.repeat(61) }), 'NAME_TOO_LONG');
+});
+
+test('routine: 非法周期被拒', () => {
+  assert.equal(routineErr({ name: 'x', cadence: 'yearly' }), 'INVALID_CADENCE');
+});
+
+test('routine: 三个周期都合法', () => {
+  assert.equal(routineOk({ name: 'x', cadence: 'daily' }).cadence, 'daily');
+  assert.equal(routineOk({ name: 'x', cadence: 'weekly' }).cadence, 'weekly');
+  assert.equal(routineOk({ name: 'x', cadence: 'monthly' }).cadence, 'monthly');
+});
+
+test('routine: 目标次数边界', () => {
+  assert.equal(routineErr({ name: 'x', target_per_period: 0 }), 'INVALID_TARGET');
+  assert.equal(routineErr({ name: 'x', target_per_period: 32 }), 'INVALID_TARGET');
+  assert.equal(routineErr({ name: 'x', target_per_period: 1.5 }), 'INVALID_TARGET');
+  assert.equal(routineOk({ name: 'x', target_per_period: 1 }).targetPerPeriod, 1);
+  assert.equal(routineOk({ name: 'x', target_per_period: 31 }).targetPerPeriod, 31);
+});
+
+test('routine: daily 周期就是当天', () => {
+  const r = periodRange('daily', '2026-10-24');
+  assert.equal(r.from, '2026-10-24');
+  assert.equal(r.to, '2026-10-24');
+});
+
+test('routine: weekly 周期是周一到周日', () => {
+  // 2026-10-24 是周六
+  const sat = periodRange('weekly', '2026-10-24');
+  assert.equal(sat.from, '2026-10-19');
+  assert.equal(sat.to, '2026-10-25');
+
+  // 周一自身是一周的开始
+  const mon = periodRange('weekly', '2026-10-19');
+  assert.equal(mon.from, '2026-10-19');
+  assert.equal(mon.to, '2026-10-25');
+});
+
+test('routine: weekly 跨周日时归到上一周', () => {
+  // 2026-10-25 是周日，仍属于 10-19 那一周
+  const sun = periodRange('weekly', '2026-10-25');
+  assert.equal(sun.from, '2026-10-19');
+  assert.equal(sun.to, '2026-10-25');
+});
+
+test('routine: monthly 周期是 1 号到月末', () => {
+  const r = periodRange('monthly', '2026-10-24');
+  assert.equal(r.from, '2026-10-01');
+  assert.equal(r.to, '2026-10-31');
+});
+
+test('routine: monthly 二月天数正确', () => {
+  assert.equal(periodRange('monthly', '2026-02-10').to, '2026-02-28');
+  assert.equal(periodRange('monthly', '2024-02-10').to, '2024-02-29');
+});
+
+test('routine: streak 空记录为 0', () => {
+  assert.equal(currentStreak([], '2026-10-24'), 0);
+});
+
+test('routine: streak 连续 3 天', () => {
+  const days = ['2026-10-22', '2026-10-23', '2026-10-24'];
+  assert.equal(currentStreak(days, '2026-10-24'), 3);
+});
+
+test('routine: streak 今天未打卡时从昨天算，不判中断', () => {
+  // 昨天和前天打了，今天还没 —— 连续记录应保留
+  const days = ['2026-10-22', '2026-10-23'];
+  assert.equal(currentStreak(days, '2026-10-24'), 2);
+});
+
+test('routine: streak 昨天也没打则归零', () => {
+  const days = ['2026-10-20', '2026-10-21'];
+  assert.equal(currentStreak(days, '2026-10-24'), 0);
+});
+
+test('routine: streak 中间断一天则取最后一段', () => {
+  const days = ['2026-10-18', '2026-10-22', '2026-10-23', '2026-10-24'];
+  assert.equal(currentStreak(days, '2026-10-24'), 3);
+});
+
+// ============ meta ============
+function accOk(b: Parameters<typeof validateAccountCreate>[0]) {
+  const r = validateAccountCreate(b);
+  if ('error' in r) throw new Error(`期望通过，却报错 ${r.error.code}`);
+  return r.value;
+}
+
+function accErr(b: Parameters<typeof validateAccountCreate>[0]) {
+  const r = validateAccountCreate(b);
+  if (!('error' in r)) throw new Error('期望报错，却通过了');
+  return r.error.code;
+}
+
+test('meta 账户: 最小输入通过，默认现金与 0 余额', () => {
+  const v = accOk({ name: '招行' });
+  assert.equal(v.name, '招行');
+  assert.equal(v.kind, 'cash');
+  assert.equal(v.balanceCents, 0);
+  assert.equal(v.isArchived, 0);
+});
+
+test('meta 账户: 空名被拒', () => {
+  assert.equal(accErr({ name: '' }), 'EMPTY_NAME');
+  assert.equal(accErr({ name: '   ' }), 'EMPTY_NAME');
+  assert.equal(accErr({}), 'EMPTY_NAME');
+});
+
+test('meta 账户: 超长名被拒', () => {
+  assert.equal(accErr({ name: 'x'.repeat(33) }), 'NAME_TOO_LONG');
+});
+
+test('meta 账户: 非法类型被拒', () => {
+  assert.equal(accErr({ name: 'x', kind: 'crypto' }), 'INVALID_KIND');
+});
+
+test('meta 账户: 四种类型都合法', () => {
+  for (const k of ['cash', 'bank', 'credit', 'ewallet'] as const) {
+    assert.equal(accOk({ name: 'x', kind: k }).kind, k);
+  }
+});
+
+test('meta 账户: 余额必须非负整数分', () => {
+  assert.equal(accErr({ name: 'x', balance_cents: -1 }), 'INVALID_BALANCE');
+  assert.equal(accErr({ name: 'x', balance_cents: 1.5 }), 'INVALID_BALANCE');
+  assert.equal(accOk({ name: 'x', balance_cents: 100000 }).balanceCents, 100000);
+});
+
+function catOk(b: Parameters<typeof validateCategory>[0]) {
+  const r = validateCategory(b);
+  if ('error' in r) throw new Error(`期望通过，却报错 ${r.error.code}`);
+  return r.value;
+}
+
+function catErr(b: Parameters<typeof validateCategory>[0]) {
+  const r = validateCategory(b);
+  if (!('error' in r)) throw new Error('期望报错，却通过了');
+  return r.error.code;
+}
+
+test('meta 分类: 最小输入通过，默认支出', () => {
+  const v = catOk({ name: '宠物' });
+  assert.equal(v.name, '宠物');
+  assert.equal(v.kind, 'expense');
+  assert.equal(v.icon, null);
+  assert.equal(v.sort, 0);
+});
+
+test('meta 分类: 空名被拒', () => {
+  assert.equal(catErr({ name: '' }), 'EMPTY_NAME');
+  assert.equal(catErr({}), 'EMPTY_NAME');
+});
+
+test('meta 分类: 超长名被拒', () => {
+  assert.equal(catErr({ name: 'x'.repeat(21) }), 'NAME_TOO_LONG');
+});
+
+test('meta 分类: 非法类型被拒', () => {
+  assert.equal(catErr({ name: 'x', kind: 'transfer' }), 'INVALID_KIND');
+});
+
+test('meta 分类: 两种类型都合法', () => {
+  assert.equal(catOk({ name: 'x', kind: 'expense' }).kind, 'expense');
+  assert.equal(catOk({ name: 'x', kind: 'income' }).kind, 'income');
+});
+
+test('meta 分类: 图标空串归一为 null', () => {
+  assert.equal(catOk({ name: 'x', icon: '' }).icon, null);
+  assert.equal(catOk({ name: 'x', icon: '   ' }).icon, null);
+  assert.equal(catOk({ name: 'x', icon: '🐱' }).icon, '🐱');
+});
+
+test('meta 分类: sort 边界', () => {
+  assert.equal(catErr({ name: 'x', sort: -1 }), 'INVALID_SORT');
+  assert.equal(catErr({ name: 'x', sort: 1000 }), 'INVALID_SORT');
+  assert.equal(catErr({ name: 'x', sort: 1.5 }), 'INVALID_SORT');
+  assert.equal(catOk({ name: 'x', sort: 0 }).sort, 0);
+  assert.equal(catOk({ name: 'x', sort: 999 }).sort, 999);
 });
 
 // ============ 汇总 ============

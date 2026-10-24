@@ -1,7 +1,6 @@
 import { useEffect, useState } from 'react';
 import { Link } from 'react-router-dom';
-import { api, type Dashboard, type Txn, type Workout } from '../api';
-import { formatYuanGrouped } from '../format';
+import { api, type Dashboard, type Txn, type Workout } from '../api';import { formatYuanGrouped } from '../format';
 import type { AppData } from '../App';
 import WeatherCard from '../components/WeatherCard';
 
@@ -26,12 +25,26 @@ export default function DashboardPage({ data }: { data: AppData }) {
           <h1 className="text-lg font-semibold text-ink-900">概览</h1>
           <p className="text-xs text-ink-500">{d.day}</p>
         </div>
-        <Link
-          to="/txn"
-          className="rounded-full bg-ink-900 px-4 py-1.5 text-sm font-medium text-white"
-        >
-          记一笔
-        </Link>
+        <div className="flex gap-2">
+          <Link
+            to="/search"
+            className="rounded-full border border-ink-300 px-3 py-1.5 text-sm font-medium text-ink-700"
+          >
+            🔍 搜索
+          </Link>
+          <Link
+            to="/tasks"
+            className="rounded-full border border-ink-300 px-3 py-1.5 text-sm font-medium text-ink-700"
+          >
+            计划
+          </Link>
+          <Link
+            to="/txn"
+            className="rounded-full bg-ink-900 px-4 py-1.5 text-sm font-medium text-white"
+          >
+            记一笔
+          </Link>
+        </div>
       </header>
 
       {/* 本月收支 */}
@@ -76,6 +89,32 @@ export default function DashboardPage({ data }: { data: AppData }) {
             hint={`${d.workout_7d.count} 次`}
           />
         </Link>
+        <Link to="/tasks" className="contents">
+          <Card
+            title="待办任务"
+            value={`${d.open_tasks} 项`}
+            hint={
+              d.tasks_overdue > 0
+                ? `${d.tasks_overdue} 项已逾期`
+                : d.tasks_today > 0
+                  ? `今天到期 ${d.tasks_today} 项`
+                  : '无近期到期'
+            }
+          />
+        </Link>
+        <Link to="/routines" className="contents">
+          <Card
+            title="今日打卡"
+            value={`${d.routines_today_done ?? 0}/${d.routines_today_total ?? 0}`}
+            hint={
+              (d.routines_today_total ?? 0) === 0
+                ? '还没有习惯'
+                : (d.routines_today_done ?? 0) >= (d.routines_today_total ?? 0)
+                  ? '今天全完成了 🎉'
+                  : '去打卡 →'
+            }
+          />
+        </Link>
         <WeatherCard />
         <Link to="/video" className="contents">
           <Card
@@ -85,6 +124,38 @@ export default function DashboardPage({ data }: { data: AppData }) {
           />
         </Link>
       </section>
+
+      {/* 近期待办 */}
+      {d.recent_tasks && d.recent_tasks.length > 0 && (
+        <section className="rounded-2xl bg-white p-4 shadow-sm">
+          <div className="mb-2 flex items-baseline justify-between">
+            <h2 className="text-sm font-semibold text-ink-900">近期待办</h2>
+            <Link to="/tasks" className="text-xs text-ink-500">
+              全部 →
+            </Link>
+          </div>
+          <ul className="divide-y divide-ink-100">
+            {d.recent_tasks.map((t) => {
+              const late = t.due_day && t.due_day < d.day;
+              const isToday = t.due_day === d.day;
+              return (
+                <li key={t.id} className="flex items-center justify-between gap-2 py-2">
+                  <span className="min-w-0 flex-1 truncate text-sm text-ink-900">{t.title}</span>
+                  {t.due_day && (
+                    <span
+                      className={`shrink-0 text-xs ${
+                        late ? 'font-medium text-red-600' : isToday ? 'text-amber-700' : 'text-ink-500'
+                      }`}
+                    >
+                      {late ? `逾期 ${t.due_day.slice(5)}` : isToday ? '今天' : t.due_day.slice(5)}
+                    </span>
+                  )}
+                </li>
+              );
+            })}
+          </ul>
+        </section>
+      )}
 
       {/* 最近运动 */}
       {d.recent_workouts && d.recent_workouts.length > 0 && (

@@ -2,6 +2,7 @@
 
 import { Hono } from 'hono';
 import type { Env } from '../types.ts';
+import { validateAccountCreate, validateCategory } from '../domain/meta.ts';
 import { ok, err } from '../http.ts';
 import { requireSession } from './auth.ts';
 
@@ -18,6 +19,7 @@ const authMw = async (c: any, next: any) => {
 metaRoutes.use('/accounts', authMw);
 metaRoutes.use('/accounts/*', authMw);
 metaRoutes.use('/categories', authMw);
+metaRoutes.use('/categories/*', authMw);
 metaRoutes.use('/net-worth', authMw);
 
 /** 账户列表（含余额） */
@@ -70,6 +72,128 @@ metaRoutes.put('/accounts/:id', async (c) => {
 
   const row = await c.env.DB.prepare('SELECT * FROM account WHERE id = ?').bind(id).first();
   return ok(row);
+});
+
+/** 新增账户 */
+metaRoutes.post('/accounts', async (c) => {
+  const body = await c.req.json().catch(() => null);
+  if (!body) return err('INVALID_BODY', '请求体必须是 JSON');
+
+  const v = validateAccountCreate(body);
+  if ('error' in v) return err(v.error.code, v.error.message);
+
+  // 账户名唯一（schema 有 UNIQUE 约束），提前查一次给出友好错误
+  const dup = await c.env.DB.prepare('SELECT id FROM account WHERE name = ?')
+    .bind(v.value.name)
+    .first();
+  if (dup) return err('DUPLICATE_NAME', '已存在同名账户', 409);
+
+  const res = await c.env.DB.prepare(
+    'INSERT INTO account (name, kind, balance_cents, is_archived) VALUES (?, ?, ?, ?)',
+  )
+    .bind(v.value.name, v.value.kind, v.value.balanceCents, v.value.isArchived)
+    .run();
+
+  const row = await c.env.DB.prepare('SELECT * FROM account WHERE id = ?')
+    .bind(res.meta.last_row_id)
+    .first();
+
+  return ok(row);
+});
+
+/** 新增分类 */
+metaRoutes.post('/categories', async (c) => {
+  const body = await c.req.json().catch(() => null);
+  if (!body) return err('INVALID_BODY', '请求体必须是 JSON');
+
+  const v = validateCategory(body);
+  if ('error' in v) return err(v.error.code, v.error.message);
+
+  // (name, kind) 唯一
+  const dup = await c.env.DB.prepare(
+    'SELECT id FROM category WHERE name = ? AND kind = ?',
+  )
+    .bind(v.value.name, v.value.kind)
+    .first();
+  if (dup) return err('DUPLICATE_NAME', '已存在同名同类型的分类', 409);
+
+  const res = await c.env.DB.prepare(
+    'INSERT INTO category (name, kind, icon, sort) VALUES (?, ?, ?, ?)',
+  )
+    .bind(v.value.name, v.value.kind, v.value.icon, v.value.sort)
+    .run();
+
+  const row = await c.env.DB.prepare('SELECT * FROM category WHERE id = ?')
+    .bind(res.meta.last_row_id)
+    .first();
+
+  return ok(row);
+});
+
+/** 修改分类 */
+metaRoutes.put('/categories/:id', async (c) => {
+  const id = Number(c.req.param('id'));
+  if (!Number.isInteger(id) || id <= 0) return err('INVALID_ID', 'id 非法');
+
+  const old = await c.env.DB.prepare('SELECT id FROM category WHERE id = ?')
+    .bind(id)
+    .first();
+  if (!old) return err('NOT_FOUND', '分类不存在', 404);
+
+  const body = await c.req.json().catch(() => null);
+  if (!body) return err('INVALID_BODY', '请求体必须是 JSON');
+
+  const v = validateCategory(body);
+  if ('error' in v) return err(v.error.code, v.error.message);
+
+  const dup = await c.env.DB.prepare(
+    'SELECT id FROM category WHERE name = ? AND kind = ? AND id != ?',
+  )
+    .bind(v.value.name, v.value.kind, id)
+    .first();
+  if (dup) return err('DUPLICATE_NAME', '已存在同名同类型的分类', 409);
+
+  await c.env.DB.prepare(
+    'UPDATE category SET name = ?, kind = ?, icon = ?, sort = ? WHERE id = ?',
+  )
+    .bind(v.value.name, v.value.kind, v.value.icon, v.value.sort, id)
+    .run();
+
+  const row = await c.env.DB.prepare('SELECT * FROM category WHERE id = ?').bind(id).first();
+  return ok(row);
+});
+
+/**
+ * 删除分类。
+ *
+ * 有流水引用时不能删 —— 会把历史记录的 category_name 变成 null。
+ * 正确做法是让用户先新建一个分类、把旧分类的流水改过去，再删。
+ */
+metaRoutes.delete('/categories/:id', async (c) => {
+  const id = Number(c.req.param('id'));
+  if (!Number.isInteger(id) || id <= 0) return err('INVALID_ID', 'id 非法');
+
+  const cat = await c.env.DB.prepare('SELECT id FROM category WHERE id = ?')
+    .bind(id)
+    .first();
+  if (!cat) return err('NOT_FOUND', '分类不存在', 404);
+
+  const used = await c.env.DB.prepare(
+    'SELECT COUNT(*) AS n FROM txn WHERE category_id = ? AND deleted_at IS NULL',
+  )
+    .bind(id)
+    .first<{ n: number }>();
+
+  if ((used?.n ?? 0) > 0) {
+    return err(
+      'CATEGORY_IN_USE',
+      `还有 ${used?.n ?? 0} 笔流水在用这个分类，请先把它们改到别的分类`,
+      409,
+    );
+  }
+
+  await c.env.DB.prepare('DELETE FROM category WHERE id = ?').bind(id).run();
+  return ok({ deleted: id });
 });
 
 /** 净资产 = 所有未归档账户余额之和 */

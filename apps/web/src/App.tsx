@@ -8,6 +8,9 @@ import SharePage from './pages/Share';
 import SettingsPage from './pages/Settings';
 import WorkoutPage from './pages/Workout';
 import VideoPage from './pages/Video';
+import TaskPage from './pages/Task';
+import RoutinePage from './pages/Routine';
+import SearchPage from './pages/Search';
 
 export interface AppData {
   accounts: Account[];
@@ -74,6 +77,9 @@ export default function App() {
           <Route path="/txn" element={<TxnPage data={data} />} />
           <Route path="/workout" element={<WorkoutPage data={data} />} />
           <Route path="/video" element={<VideoPage data={data} />} />
+          <Route path="/tasks" element={<TaskPage data={data} />} />
+          <Route path="/routines" element={<RoutinePage data={data} />} />
+          <Route path="/search" element={<SearchPage />} />
           <Route path="/share" element={<SharePage data={data} />} />
           <Route path="/settings" element={<SettingsPage data={data} />} />
           <Route path="*" element={<Navigate to="/" replace />} />
@@ -87,6 +93,7 @@ export default function App() {
 const TABS = [
   { to: '/', label: '概览', icon: '📊' },
   { to: '/txn', label: '记账', icon: '💰' },
+  { to: '/tasks', label: '计划', icon: '✅' },
   { to: '/workout', label: '运动', icon: '🏃' },
   { to: '/video', label: '学习', icon: '🎬' },
   { to: '/settings', label: '设置', icon: '⚙️' },

@@ -18,46 +18,100 @@ dashboardRoutes.get('/', async (c) => {
   const month = c.req.query('month') ?? currentMonth();
   const day = currentDay();
 
-  const [monthStats, todayStats, recent, netWorth, workout7, taskOpen] = await Promise.all([
-    c.env.DB.prepare(
-      `SELECT kind, SUM(total_cents) AS total FROM monthly_summary
-       WHERE month = ? GROUP BY kind`,
-    )
-      .bind(month)
-      .all<{ kind: string; total: number }>(),
+  const [
+    monthStats,
+    todayStats,
+    recent,
+    netWorth,
+    workout7,
+    taskOpen,
+    taskToday,
+    taskOverdue,
+    taskRecent,
+    routineToday,
+    routinePending,
+  ] = await Promise.all([
+      c.env.DB.prepare(
+        `SELECT kind, SUM(total_cents) AS total FROM monthly_summary
+         WHERE month = ? GROUP BY kind`,
+      )
+        .bind(month)
+        .all<{ kind: string; total: number }>(),
 
-    c.env.DB.prepare(
-      `SELECT type, SUM(amount_cents) AS total, COUNT(*) AS n FROM txn
-       WHERE deleted_at IS NULL AND occurred_day = ? GROUP BY type`,
-    )
-      .bind(day)
-      .all<{ type: string; total: number; n: number }>(),
+      c.env.DB.prepare(
+        `SELECT type, SUM(amount_cents) AS total, COUNT(*) AS n FROM txn
+         WHERE deleted_at IS NULL AND occurred_day = ? GROUP BY type`,
+      )
+        .bind(day)
+        .all<{ type: string; total: number; n: number }>(),
 
-    c.env.DB.prepare(
-      `SELECT t.id, t.type, t.amount_cents, t.merchant, t.note, t.occurred_at,
-              a.name AS account_name, c.name AS category_name
-       FROM txn t
-       LEFT JOIN account a ON a.id = t.account_id
-       LEFT JOIN category c ON c.id = t.category_id
-       WHERE t.deleted_at IS NULL
-       ORDER BY t.occurred_at DESC, t.id DESC LIMIT 8`,
-    ).all(),
+      c.env.DB.prepare(
+        `SELECT t.id, t.type, t.amount_cents, t.merchant, t.note, t.occurred_at,
+                a.name AS account_name, c.name AS category_name
+         FROM txn t
+         LEFT JOIN account a ON a.id = t.account_id
+         LEFT JOIN category c ON c.id = t.category_id
+         WHERE t.deleted_at IS NULL
+         ORDER BY t.occurred_at DESC, t.id DESC LIMIT 8`,
+      ).all(),
 
-    c.env.DB.prepare(
-      'SELECT COALESCE(SUM(balance_cents), 0) AS total FROM account WHERE is_archived = 0',
-    ).first<{ total: number }>(),
+      c.env.DB.prepare(
+        'SELECT COALESCE(SUM(balance_cents), 0) AS total FROM account WHERE is_archived = 0',
+      ).first<{ total: number }>(),
 
-    c.env.DB.prepare(
-      `SELECT COALESCE(SUM(duration_min), 0) AS minutes, COUNT(*) AS n
-       FROM workout WHERE deleted_at IS NULL AND occurred_day >= date(?, '-6 days')`,
-    )
-      .bind(day)
-      .first<{ minutes: number; n: number }>(),
+      c.env.DB.prepare(
+        `SELECT COALESCE(SUM(duration_min), 0) AS minutes, COUNT(*) AS n
+         FROM workout WHERE deleted_at IS NULL AND occurred_day >= date(?, '-6 days')`,
+      )
+        .bind(day)
+        .first<{ minutes: number; n: number }>(),
 
-    c.env.DB.prepare(
-      `SELECT COUNT(*) AS n FROM task WHERE deleted_at IS NULL AND status IN ('todo','doing')`,
-    ).first<{ n: number }>(),
-  ]);
+      c.env.DB.prepare(
+        `SELECT COUNT(*) AS n FROM task WHERE deleted_at IS NULL AND status IN ('todo','doing')`,
+      ).first<{ n: number }>(),
+
+      c.env.DB.prepare(
+        `SELECT COUNT(*) AS n FROM task
+         WHERE deleted_at IS NULL AND status IN ('todo','doing') AND due_day = ?`,
+      )
+        .bind(day)
+        .first<{ n: number }>(),
+
+      c.env.DB.prepare(
+        `SELECT COUNT(*) AS n FROM task
+         WHERE deleted_at IS NULL AND status IN ('todo','doing')
+           AND due_day IS NOT NULL AND due_day < ?`,
+      )
+        .bind(day)
+        .first<{ n: number }>(),
+
+      c.env.DB.prepare(
+        `SELECT id, title, status, priority, due_day FROM task
+         WHERE deleted_at IS NULL AND status IN ('todo','doing')
+         ORDER BY
+           CASE WHEN due_day IS NULL THEN 1 ELSE 0 END,
+           due_day,
+           priority,
+           id DESC
+         LIMIT 5`,
+      ).all<{ id: number; title: string; status: string; priority: number; due_day: string | null }>(),
+
+      // 今日应打卡的日常（daily 习惯；weekly/monthly 的进度在 /routines 里看）
+      c.env.DB.prepare(
+        `SELECT COUNT(*) AS n FROM routine WHERE is_active = 1 AND cadence = 'daily'`,
+      ).first<{ n: number }>(),
+
+      c.env.DB.prepare(
+        `SELECT COUNT(*) AS n FROM routine r
+         WHERE r.is_active = 1 AND r.cadence = 'daily'
+           AND EXISTS (
+             SELECT 1 FROM routine_log l
+             WHERE l.routine_id = r.id AND l.done_day = ?
+           )`,
+      )
+        .bind(day)
+        .first<{ n: number }>(),
+    ]);
 
   const pick = (rows: { kind: string; total: number }[], kind: string) =>
     rows.find((r) => r.kind === kind)?.total ?? 0;
@@ -102,6 +156,11 @@ dashboardRoutes.get('/', async (c) => {
     net_worth_cents: netWorth?.total ?? 0,
     workout_7d: { minutes: workout7?.minutes ?? 0, count: workout7?.n ?? 0 },
     open_tasks: taskOpen?.n ?? 0,
+    tasks_today: taskToday?.n ?? 0,
+    tasks_overdue: taskOverdue?.n ?? 0,
+    routines_today_total: routineToday?.n ?? 0,
+    routines_today_done: routinePending?.n ?? 0,
+    recent_tasks: taskRecent?.results ?? [],
     recent_txns: recent.results ?? [],
     // P1
     video_stats: {

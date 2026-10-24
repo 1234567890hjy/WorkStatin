@@ -1,9 +1,21 @@
 import { useEffect, useMemo, useState } from 'react';
-import { api, ApiError, type ShareParse, type Txn } from '../api';
+import { api, ApiError, type MonthlyStats, type ShareParse, type Txn } from '../api';
 import { formatYuanGrouped } from '../format';
+import CategoryBars from '../components/CategoryBars';
 import type { AppData } from '../App';
 
 type Kind = 'expense' | 'income' | 'transfer';
+
+/** 当前月与往前 N 个月，供月份切换用。 */
+function monthOptions(n = 12): string[] {
+  const out: string[] = [];
+  const now = new Date();
+  for (let i = 0; i < n; i++) {
+    const d = new Date(now.getFullYear(), now.getMonth() - i, 1);
+    out.push(`${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, '0')}`);
+  }
+  return out;
+}
 
 export default function TxnPage({ data }: { data: AppData }) {
   const [kind, setKind] = useState<Kind>('expense');
@@ -20,6 +32,12 @@ export default function TxnPage({ data }: { data: AppData }) {
   const [list, setList] = useState<Txn[]>([]);
   const [listKey, setListKey] = useState(0);
 
+  // 月度统计（分类占比图）
+  const [month, setMonth] = useState(() => monthOptions(1)[0] ?? '');
+  const [statKind, setStatKind] = useState<'expense' | 'income'>('expense');
+  const [stats, setStats] = useState<MonthlyStats | null>(null);
+  const [statsOpen, setStatsOpen] = useState(false);
+
   const cats = useMemo(
     () => data.categories.filter((c) => c.kind === (kind === 'income' ? 'income' : 'expense')),
     [data.categories, kind],
@@ -32,10 +50,17 @@ export default function TxnPage({ data }: { data: AppData }) {
 
   useEffect(() => {
     api
-      .get<{ items: Txn[] }>('/txns?limit=30')
+      .get<{ items: Txn[] }>(`/txns?limit=30${month ? `&month=${month}` : ''}`)
       .then((r) => setList(r.items))
       .catch(() => setList([]));
-  }, [listKey]);
+  }, [listKey, month]);
+
+  useEffect(() => {
+    api
+      .get<MonthlyStats>(`/txns/stats/monthly?month=${month}`)
+      .then(setStats)
+      .catch(() => setStats(null));
+  }, [month, listKey]);
 
   /**
    * 从剪贴板读取短信/通知文本并解析。
@@ -272,9 +297,70 @@ export default function TxnPage({ data }: { data: AppData }) {
         {busy ? '保存中…' : '保存'}
       </button>
 
+      {/* 月度分类占比 */}
+      <section className="rounded-2xl bg-white p-4 shadow-sm">
+        <div className="mb-3 flex items-center justify-between">
+          <button
+            onClick={() => setStatsOpen((v) => !v)}
+            className="flex items-baseline gap-1.5 text-sm font-semibold text-ink-900"
+          >
+            分类占比
+            <span className="text-xs text-ink-500">{statsOpen ? '收起 ▲' : '展开 ▼'}</span>
+          </button>
+          <select
+            value={month}
+            onChange={(e) => setMonth(e.target.value)}
+            className="rounded-lg border border-ink-100 px-2 py-1 text-xs outline-none focus:border-ink-300"
+          >
+            {monthOptions().map((m) => (
+              <option key={m} value={m}>
+                {m}
+              </option>
+            ))}
+          </select>
+        </div>
+
+        {statsOpen && (
+          <>
+            <div className="mb-3 flex gap-1 rounded-lg bg-ink-100 p-1">
+              <button
+                onClick={() => setStatKind('expense')}
+                className={`flex-1 rounded-md py-1 text-xs font-medium transition ${
+                  statKind === 'expense' ? 'bg-white text-ink-900 shadow-sm' : 'text-ink-500'
+                }`}
+              >
+                支出
+              </button>
+              <button
+                onClick={() => setStatKind('income')}
+                className={`flex-1 rounded-md py-1 text-xs font-medium transition ${
+                  statKind === 'income' ? 'bg-white text-ink-900 shadow-sm' : 'text-ink-500'
+                }`}
+              >
+                收入
+              </button>
+            </div>
+
+            {stats ? (
+              <CategoryBars
+                rows={stats.by_category}
+                kind={statKind}
+                totalCents={
+                  statKind === 'expense' ? stats.expense_cents : stats.income_cents
+                }
+              />
+            ) : (
+              <p className="py-6 text-center text-sm text-ink-500">加载中…</p>
+            )}
+          </>
+        )}
+      </section>
+
       {/* 最近记录 */}
       <section className="rounded-2xl bg-white p-4 shadow-sm">
-        <h2 className="mb-2 text-sm font-semibold text-ink-900">最近 30 笔</h2>
+        <h2 className="mb-2 text-sm font-semibold text-ink-900">
+          {month} 最近 30 笔
+        </h2>
         {list.length === 0 ? (
           <p className="py-6 text-center text-sm text-ink-500">暂无记录</p>
         ) : (

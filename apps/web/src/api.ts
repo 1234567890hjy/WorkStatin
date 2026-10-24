@@ -57,6 +57,8 @@ export const api = {
     request<T>(p, { method: 'POST', body: body === undefined ? undefined : JSON.stringify(body) }),
   put: <T>(p: string, body?: unknown) =>
     request<T>(p, { method: 'PUT', body: body === undefined ? undefined : JSON.stringify(body) }),
+  patch: <T>(p: string, body?: unknown) =>
+    request<T>(p, { method: 'PATCH', body: body === undefined ? undefined : JSON.stringify(body) }),
   del: <T>(p: string) => request<T>(p, { method: 'DELETE' }),
 };
 
@@ -69,6 +71,9 @@ export interface Account {
   balance_cents: number;
   is_archived: number;
 }
+
+export type AccountKind = 'cash' | 'bank' | 'credit' | 'ewallet';
+export type CategoryKind = 'expense' | 'income';
 
 export interface Category {
   id: number;
@@ -95,6 +100,61 @@ export interface Txn {
   category_name?: string;
 }
 
+// ---------- 日常管理 ----------
+
+export type Cadence = 'daily' | 'weekly' | 'monthly';
+
+export interface Routine {
+  id: number;
+  name: string;
+  cadence: Cadence;
+  target_per_period: number;
+  is_active: number;
+  created_at: string;
+  // 列表接口附带的进度字段
+  period_from?: string;
+  period_to?: string;
+  period_done?: number;
+  period_target?: number;
+  period_met?: boolean;
+  checked_today?: boolean;
+  streak?: number;
+  total_days?: number;
+}
+
+// ---------- 计划与任务 ----------
+
+export type TaskStatus = 'todo' | 'doing' | 'done' | 'dropped';
+export type TaskPriority = 1 | 2 | 3;
+
+export interface Task {
+  id: number;
+  title: string;
+  detail: string | null;
+  status: TaskStatus;
+  priority: TaskPriority;
+  due_day: string | null;
+  done_at: string | null;
+  created_at: string;
+  updated_at: string;
+}
+
+export interface MonthlyCategoryRow {
+  kind: string;
+  category_id: number | null;
+  category_name: string | null;
+  total_cents: number;
+  txn_count: number;
+}
+
+export interface MonthlyStats {
+  month: string;
+  expense_cents: number;
+  income_cents: number;
+  transfer_cents: number;
+  by_category: MonthlyCategoryRow[];
+}
+
 export interface Dashboard {
   month: string;
   day: string;
@@ -103,6 +163,11 @@ export interface Dashboard {
   net_worth_cents: number;
   workout_7d: { minutes: number; count: number };
   open_tasks: number;
+  tasks_today: number;
+  tasks_overdue: number;
+  routines_today_total: number;
+  routines_today_done: number;
+  recent_tasks: Task[];
   recent_txns: Txn[];
   // P1
   video_stats: { pending: number; done: number };
@@ -174,7 +239,6 @@ export interface Weather {
 }
 
 export type VideoStatus = 'draft' | 'transcribed' | 'summarized' | 'archived';
-
 export interface VideoItem {
   id: number;
   url: string;

@@ -97,6 +97,86 @@ authRoutes.post('/logout', async (c) => {
   return ok({ loggedOut: true });
 });
 
+/**
+ * 修改口令。
+ *
+ * 为什么必须有这个功能：setup 只在首次可用，login 只验证不改写。
+ * 一旦忘记口令，除了手工改 D1 没有任何办法 —— 这是功能性缺陷，不是体验问题。
+ *
+ * 安全设计：
+ * - 必须提供旧口令，防止会话被盗后被直接改密踢人（攻击者拿到 token 也改不了）
+ * - 复用登录限流，防暴力试旧口令
+ * - 换新盐，不复用旧盐
+ * - 改密后**只保留当前会话**，其他设备全部下线 —— 单人场景下这是正确行为：
+ *   如果旧口令已泄露，那些会话本就不该继续活着
+ */
+authRoutes.put('/password', async (c) => {
+  const session = await requireSession(c.env, c.req.raw);
+  if (!session) return err('UNAUTHORIZED', '未登录或会话已过期', 401);
+
+  const ip = clientIp(c.req.raw);
+  const fails = await c.env.DB.prepare(
+    `SELECT COUNT(*) AS n FROM login_attempt
+     WHERE ip = ? AND ok = 0 AND attempted_at > datetime('now', '-1 hour')`,
+  )
+    .bind(ip)
+    .first<{ n: number }>();
+
+  if ((fails?.n ?? 0) >= MAX_FAILED_PER_HOUR) {
+    return err('TOO_MANY_ATTEMPTS', '尝试过于频繁，请一小时后再试', 429);
+  }
+
+  const body = await c.req
+    .json<{ old_password?: string; new_password?: string }>()
+    .catch(() => null);
+  if (!body) return err('INVALID_BODY', '请求体必须是 JSON');
+
+  const oldPassword = body.old_password ?? '';
+  const newPassword = body.new_password ?? '';
+
+  if (!oldPassword) return err('MISSING_OLD_PASSWORD', '请提供当前口令');
+  if (newPassword.length < 8) return err('WEAK_PASSWORD', '新口令至少 8 位');
+  if (newPassword === oldPassword) {
+    return err('SAME_PASSWORD', '新口令不能与当前口令相同');
+  }
+
+  const user = await c.env.DB.prepare('SELECT * FROM user WHERE id = ?')
+    .bind(session.user_id)
+    .first<UserRow>();
+  if (!user) return err('NOT_FOUND', '用户不存在', 404);
+
+  const passed = await verifyPassword(
+    oldPassword,
+    user.password_hash,
+    user.password_salt,
+    user.iterations,
+  );
+
+  await c.env.DB.prepare('INSERT INTO login_attempt (ip, ok) VALUES (?, ?)')
+    .bind(ip, passed ? 1 : 0)
+    .run();
+
+  if (!passed) return err('BAD_CREDENTIALS', '当前口令不正确', 401);
+
+  const { hash, salt, iterations } = await hashPassword(newPassword);
+  await c.env.DB.prepare(
+    `UPDATE user SET password_hash = ?, password_salt = ?, iterations = ?,
+       updated_at = datetime('now')
+     WHERE id = ?`,
+  )
+    .bind(hash, salt, iterations, user.id)
+    .run();
+
+  // 只保留当前会话：其他设备全部下线
+  await c.env.DB.prepare(
+    'DELETE FROM session WHERE user_id = ? AND token_hash != ?',
+  )
+    .bind(user.id, session.token_hash)
+    .run();
+
+  return ok({ changed: true, username: user.username });
+});
+
 /** 当前用户 */
 authRoutes.get('/me', async (c) => {
   const session = await requireSession(c.env, c.req.raw);
