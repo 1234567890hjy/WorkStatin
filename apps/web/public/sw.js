@@ -10,8 +10,15 @@
  * 单人自用，缓存策略越简单越不容易出诡异的「更新不生效」问题。
  */
 
-const CACHE = 'ws-shell-v1';
-const SHELL = ['/', '/index.html', '/manifest.webmanifest', '/icon.svg'];
+const CACHE = 'ws-shell-v2';
+const SHELL = [
+  '/',
+  '/index.html',
+  '/manifest.webmanifest',
+  '/icon.svg',
+  '/icon-192.png',
+  '/icon-512.png',
+];
 
 self.addEventListener('install', (event) => {
   event.waitUntil(
