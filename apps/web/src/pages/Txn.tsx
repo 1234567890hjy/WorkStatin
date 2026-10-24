@@ -1,5 +1,5 @@
 import { useEffect, useMemo, useState } from 'react';
-import { api, ApiError, type Txn } from '../api';
+import { api, ApiError, type ShareParse, type Txn } from '../api';
 import { formatYuanGrouped } from '../format';
 import type { AppData } from '../App';
 
@@ -15,6 +15,7 @@ export default function TxnPage({ data }: { data: AppData }) {
   const [note, setNote] = useState('');
   const [busy, setBusy] = useState(false);
   const [msg, setMsg] = useState<{ type: 'ok' | 'err'; text: string } | null>(null);
+  const [pasting, setPasting] = useState(false);
 
   const [list, setList] = useState<Txn[]>([]);
   const [listKey, setListKey] = useState(0);
@@ -35,6 +36,50 @@ export default function TxnPage({ data }: { data: AppData }) {
       .then((r) => setList(r.items))
       .catch(() => setList([]));
   }, [listKey]);
+
+  /**
+   * 从剪贴板读取短信/通知文本并解析。
+   *
+   * 这是 share_target 的替代方案：不依赖浏览器是否支持 Web Share Target，
+   * 任何浏览器都能用 —— 复制短信 → 点这个按钮 → 自动填好金额和商户。
+   */
+  async function pasteFromClipboard() {
+    setPasting(true);
+    setMsg(null);
+    try {
+      if (!navigator.clipboard?.readText) {
+        setMsg({ type: 'err', text: '当前浏览器不支持读取剪贴板，请手动输入' });
+        return;
+      }
+      const text = await navigator.clipboard.readText();
+      if (!text.trim()) {
+        setMsg({ type: 'err', text: '剪贴板是空的，请先复制短信内容' });
+        return;
+      }
+
+      const r = await api.post<ShareParse>('/share/parse', { text });
+      if (!r.parsed) {
+        setMsg({ type: 'err', text: '没识别出金额，请手动输入' });
+        return;
+      }
+
+      setAmount(r.draft.amount);
+      if (r.draft.merchant) setMerchant(r.draft.merchant);
+      setMsg({
+        type: 'ok',
+        text: `已识别：¥${r.draft.amount}${r.draft.merchant ? ` · ${r.draft.merchant}` : ''}`,
+      });
+    } catch (e) {
+      // 剪贴板权限被拒是常见情况（需要 HTTPS + 用户手势）
+      const m = e instanceof ApiError ? e.message : '读取剪贴板失败';
+      setMsg({
+        type: 'err',
+        text: m.includes('denied') || m.includes('permission') ? '剪贴板权限被拒绝，请手动输入' : m,
+      });
+    } finally {
+      setPasting(false);
+    }
+  }
 
   const amountCents = useMemo(() => {
     const s = amount.trim();
@@ -95,7 +140,16 @@ export default function TxnPage({ data }: { data: AppData }) {
 
   return (
     <div className="mx-auto max-w-md space-y-4 px-4 pt-6">
-      <h1 className="text-lg font-semibold text-ink-900">记一笔</h1>
+      <div className="flex items-center justify-between">
+        <h1 className="text-lg font-semibold text-ink-900">记一笔</h1>
+        <button
+          onClick={() => void pasteFromClipboard()}
+          disabled={pasting}
+          className="rounded-full border border-ink-300 px-3 py-1 text-xs font-medium text-ink-700 disabled:opacity-40"
+        >
+          {pasting ? '识别中…' : '📋 从剪贴板识别'}
+        </button>
+      </div>
 
       {/* 类型切换 */}
       <div className="flex rounded-lg bg-ink-100 p-1">
