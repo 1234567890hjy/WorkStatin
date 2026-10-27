@@ -12,6 +12,14 @@ import { normalizeOccurred, isValidDay, isValidMonth, expiryFromNow } from '../s
 import { validateTask } from '../src/domain/task.ts';
 import { validateRoutine, periodRange, currentStreak } from '../src/domain/routine.ts';
 import { validateAccountCreate, validateCategory } from '../src/domain/meta.ts';
+import {
+  parseCoord,
+  parseLatLon,
+  roundCoord,
+  cacheKeyOf,
+  normalizeCityName,
+  sameArea,
+} from '../src/domain/geo.ts';
 
 let passed = 0;
 let failed = 0;
@@ -512,6 +520,108 @@ test('meta 分类: sort 边界', () => {
   assert.equal(catErr({ name: 'x', sort: 1.5 }), 'INVALID_SORT');
   assert.equal(catOk({ name: 'x', sort: 0 }).sort, 0);
   assert.equal(catOk({ name: 'x', sort: 999 }).sort, 999);
+});
+
+// ============ geo 定位 ============
+test('geo: 解析数字与数字字符串', () => {
+  assert.equal(parseCoord(38.914), 38.914);
+  assert.equal(parseCoord('121.6147'), 121.6147);
+  assert.equal(parseCoord(' 39.9 '), 39.9);
+  assert.equal(parseCoord('-0.5'), -0.5);
+});
+
+test('geo: 拒绝非数字', () => {
+  assert.equal(parseCoord(''), null);
+  assert.equal(parseCoord('abc'), null);
+  assert.equal(parseCoord('NaN'), null);
+  assert.equal(parseCoord('Infinity'), null);
+  assert.equal(parseCoord(null), null);
+  assert.equal(parseCoord(undefined), null);
+  assert.equal(parseCoord({}), null);
+});
+
+test('geo: 合法坐标', () => {
+  assert.deepEqual(parseLatLon('38.914', '121.6147'), { lat: 38.914, lon: 121.6147 });
+  assert.deepEqual(parseLatLon(39.9042, 116.4074), { lat: 39.9042, lon: 116.4074 });
+  assert.deepEqual(parseLatLon(90, 180), { lat: 90, lon: 180 });
+  assert.deepEqual(parseLatLon(-90, -180), { lat: -90, lon: -180 });
+});
+
+test('geo: 越界坐标被拒', () => {
+  assert.equal(parseLatLon(91, 0), null);
+  assert.equal(parseLatLon(-91, 0), null);
+  assert.equal(parseLatLon(0, 181), null);
+  assert.equal(parseLatLon(0, -181), null);
+});
+
+test('geo: 0,0 视为定位失败', () => {
+  assert.equal(parseLatLon(0, 0), null);
+  assert.equal(parseLatLon('0', '0'), null);
+  assert.deepEqual(parseLatLon(0, 121), { lat: 0, lon: 121 });
+});
+
+test('geo: 缺一项即失效', () => {
+  assert.equal(parseLatLon('38.9', undefined), null);
+  assert.equal(parseLatLon(undefined, '121.6'), null);
+  assert.equal(parseLatLon('', ''), null);
+});
+
+test('geo: 缓存键按 2 位小数聚合', () => {
+  assert.equal(cacheKeyOf({ lat: 38.914, lon: 121.6147 }), '38.91,121.61');
+  assert.equal(cacheKeyOf({ lat: 38.9132, lon: 121.6099 }), '38.91,121.61');
+  assert.notEqual(
+    cacheKeyOf({ lat: 38.914, lon: 121.6147 }),
+    cacheKeyOf({ lat: 38.95, lon: 121.61 }),
+  );
+});
+
+test('geo: roundCoord', () => {
+  assert.equal(roundCoord(38.9145, 2), 38.91);
+  assert.equal(roundCoord(121.6147, 2), 121.61);
+  assert.equal(roundCoord(38.9155, 2), 38.92);
+  assert.equal(roundCoord(-38.9155, 2), -38.92);
+});
+
+test('geo: 地名去掉「市」', () => {
+  assert.equal(normalizeCityName('大连市'), '大连');
+  assert.equal(normalizeCityName('北京市'), '北京');
+  assert.equal(normalizeCityName('上海市'), '上海');
+  assert.equal(normalizeCityName('大连'), '大连');
+  assert.equal(normalizeCityName('市'), '市');
+  assert.equal(normalizeCityName('都市'), '都市');
+});
+
+test('geo: 地名空值与非法类型', () => {
+  assert.equal(normalizeCityName(''), null);
+  assert.equal(normalizeCityName('   '), null);
+  assert.equal(normalizeCityName(null), null);
+  assert.equal(normalizeCityName(undefined), null);
+  assert.equal(normalizeCityName(123), null);
+});
+
+test('geo: 繁体地名转简体（反查接口实测会返回繁体）', () => {
+  // localityLanguage=zh 时实测返回「大連市」
+  assert.equal(normalizeCityName('大連市'), '大连');
+  assert.equal(normalizeCityName('廣州市'), '广州');
+  assert.equal(normalizeCityName('遼寧省瀋陽市'), '辽宁省沈阳');
+  assert.equal(normalizeCityName('臺北市'), '台北');
+});
+
+test('geo: 简体地名不受影响', () => {
+  assert.equal(normalizeCityName('大连市'), '大连');
+  assert.equal(normalizeCityName('广州市'), '广州');
+  assert.equal(normalizeCityName('成都市'), '成都');
+  assert.equal(normalizeCityName('深圳市'), '深圳');
+});
+
+test('geo: sameArea 同格判断', () => {
+  const a = { lat: 38.914, lon: 121.6147 };
+  const b = { lat: 38.9132, lon: 121.6099 };
+  const c = { lat: 39.9042, lon: 116.4074 };
+  assert.equal(sameArea(a, b), true);
+  assert.equal(sameArea(a, c), false);
+  assert.equal(sameArea(a, null), false);
+  assert.equal(sameArea(null, null), false);
 });
 
 // ============ 汇总 ============

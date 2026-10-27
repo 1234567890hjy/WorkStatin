@@ -16,6 +16,8 @@ run_worker_first = ["/api/*"]
 # 本地开发时，前端在 5173，后端在 8787
 [vars]
 ENVIRONMENT = "production"
+# 天气兜底坐标：只有「浏览器定位失败」且「边缘 IP 也推断不出位置」时才会用到。
+# 正常情况下坐标随人走，不需要改这里。
 WEATHER_LAT = "38.9140"
 WEATHER_LON = "121.6147"
 WEATHER_LABEL = "大连"

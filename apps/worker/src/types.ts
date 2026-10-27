@@ -9,7 +9,10 @@ export interface Env {
   // ---- P1 ----
   /** DeepSeek API 密钥；未配置时摘要功能降级为人工填写 */
   DEEPSEEK_API_KEY?: string;
-  /** 天气坐标与显示名（可选，默认北京） */
+  /**
+   * 天气兜底坐标与显示名（可选）。
+   * 定位链路：前端 GPS → Cloudflare 边缘 IP → 这里。只有前两级都失败才会用到。
+   */
   WEATHER_LAT?: string;
   WEATHER_LON?: string;
   WEATHER_LABEL?: string;

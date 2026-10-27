@@ -217,6 +217,11 @@ export interface Weather {
   available: boolean;
   reason?: string;
   label: string;
+  /** 实际使用的坐标（4 位小数） */
+  lat?: number;
+  lon?: number;
+  /** 坐标来源：gps=浏览器定位 / edge=边缘 IP / config=服务端兜底 */
+  source?: 'gps' | 'edge' | 'config';
   current?: {
     temp: number | null;
     feels_like: number | null;

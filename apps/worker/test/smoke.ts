@@ -1256,6 +1256,42 @@ await t('P1 天气: 未登录被拒', async () => {
   token = saved;
 });
 
+await t('P1 天气: 无坐标时回落到配置坐标', async () => {
+  const r = await call('/api/weather');
+  assert.equal(r.status, 200);
+  // 测试环境无 cf 对象 → 必须落到 config
+  assert.equal(r.body.data.source, 'config');
+  // env 里没配 WEATHER_LABEL → 默认北京
+  assert.equal(r.body.data.label, '北京');
+  assert.equal(typeof r.body.data.lat, 'number');
+  assert.equal(typeof r.body.data.lon, 'number');
+});
+
+await t('P1 天气: 传入坐标时按其定位', async () => {
+  const r = await call('/api/weather?lat=38.9140&lon=121.6147');
+  assert.equal(r.status, 200);
+  assert.equal(r.body.data.source, 'gps');
+  // 坐标被回显，前端可据此确认显示的就是自己传的位置
+  assert.equal(r.body.data.lat, 38.914);
+  assert.equal(r.body.data.lon, 121.6147);
+});
+
+await t('P1 天气: 非法坐标不报错，静默兜底', async () => {
+  for (const q of ['?lat=abc&lon=121.6', '?lat=91&lon=0', '?lat=0&lon=0', '?lat=&lon=']) {
+    const r = await call(`/api/weather${q}`);
+    assert.equal(r.status, 200, `${q} 应该仍返回 200`);
+    // 脏坐标不能当成 gps 用
+    assert.notEqual(r.body.data.source, 'gps', `${q} 不该被判为 gps`);
+  }
+});
+
+await t('P1 天气: 换坐标换缓存格子', async () => {
+  const dl = await call('/api/weather?lat=38.9140&lon=121.6147');
+  const bj = await call('/api/weather?lat=39.9042&lon=116.4074');
+  assert.equal(dl.body.data.lat, 38.914);
+  assert.equal(bj.body.data.lat, 39.9042);
+});
+
 // ---- Dashboard 集成 ----
 await t('P1 Dashboard: 含 P1 字段', async () => {
   const r = await call('/api/dashboard');
