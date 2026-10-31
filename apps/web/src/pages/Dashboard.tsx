@@ -1,22 +1,50 @@
-import { useEffect, useState } from 'react';
+import { useEffect, useMemo, useState } from 'react';
 import { Link } from 'react-router-dom';
-import { api, type Dashboard, type Txn, type Workout } from '../api';import { formatYuanGrouped } from '../format';
+import { api, type Dashboard, type Txn, type Workout } from '../api';
+import { formatYuanGrouped } from '../format';
 import type { AppData } from '../App';
 import WeatherCard from '../components/WeatherCard';
+import UndoToast from '../components/UndoToast';
 
 export default function DashboardPage({ data }: { data: AppData }) {
   const [d, setD] = useState<Dashboard | null>(null);
   const [err, setErr] = useState<string | null>(null);
+  // 待撤销的自动记账（只在本次页面生命周期内有效）
+  const [undoTxn, setUndoTxn] = useState<Txn | null>(null);
+  const [dismissed, setDismissed] = useState(false);
+
+  async function load() {
+    try {
+      const r = await api.get<Dashboard>('/dashboard');
+      setD(r);
+    } catch (e) {
+      setErr((e as Error).message);
+    }
+  }
 
   useEffect(() => {
-    api
-      .get<Dashboard>('/dashboard')
-      .then(setD)
-      .catch((e: Error) => setErr(e.message));
+    void load();
   }, []);
+
+  // 检测「刚自动记了账」：recent_txns 里 source=notify 且今天发生的，
+  // 取最新一笔作为可撤销对象。只弹一次。
+  const autoTxn = useMemo(() => {
+    if (!d || dismissed) return null;
+    if (!d.notify || d.notify.recent_auto_count === 0) return null;
+    const cand = d.recent_txns.find((t) => t.source === 'notify');
+    return cand ?? null;
+  }, [d, dismissed]);
+
+  useEffect(() => {
+    if (autoTxn && !undoTxn) setUndoTxn(autoTxn);
+  }, [autoTxn, undoTxn]);
 
   if (err) return <Centered>{err}</Centered>;
   if (!d) return <Centered>加载中…</Centered>;
+
+  const n = d.notify;
+  const showBanner =
+    n && (n.pending_count > 0 || n.raw_new_count > 0 || !n.healthy);
 
   return (
     <div className="mx-auto max-w-md space-y-4 px-4 pt-6">
@@ -46,6 +74,38 @@ export default function DashboardPage({ data }: { data: AppData }) {
           </Link>
         </div>
       </header>
+
+      {/* 通知自动记账现状：只在有事情要处理时出现 */}
+      {showBanner && (
+        <Link to="/notify" className="block">
+          <section
+            className={`rounded-2xl p-3.5 ${
+              n && !n.healthy ? 'bg-amber-50' : 'bg-blue-50'
+            }`}
+          >
+            {n && !n.healthy ? (
+              <>
+                <p className="text-sm font-medium text-amber-800">
+                  ⚠️ 通知采集可能已断开
+                </p>
+                <p className="mt-0.5 text-xs text-amber-700">
+                  {!n.has_device
+                    ? '从未收到设备心跳，点这里去配置'
+                    : `已 ${n.heartbeat_age_hours ?? '?'} 小时无心跳，点这里查看`}
+                </p>
+              </>
+            ) : (
+              <>
+                <p className="text-sm font-medium text-blue-800">
+                  有 {n?.pending_count ?? 0} 笔待确认
+                  {(n?.raw_new_count ?? 0) > 0 && `、${n?.raw_new_count} 条未识别`}
+                </p>
+                <p className="mt-0.5 text-xs text-blue-700">点这里处理 →</p>
+              </>
+            )}
+          </section>
+        </Link>
+      )}
 
       {/* 本月收支 */}
       <section className="rounded-2xl bg-white p-4 shadow-sm">
@@ -191,6 +251,22 @@ export default function DashboardPage({ data }: { data: AppData }) {
       <p className="pb-4 text-center text-xs text-ink-500">
         共 {data.accounts.length} 个账户 · {data.categories.length} 个分类
       </p>
+
+      {undoTxn && (
+        <UndoToast
+          txn={undoTxn}
+          onUndone={() => {
+            setUndoTxn(null);
+            setDismissed(true);
+            void load();
+            void data.reload();
+          }}
+          onDismiss={() => {
+            setUndoTxn(null);
+            setDismissed(true);
+          }}
+        />
+      )}
     </div>
   );
 }
@@ -200,11 +276,20 @@ function TxnRow({ t }: { t: Txn }) {
   const color =
     t.type === 'expense' ? 'text-ink-900' : t.type === 'income' ? 'text-emerald-600' : 'text-blue-600';
   const label = t.merchant || t.category_name || t.note || '未命名';
+  // 自动记账的标记：让用户一眼看出这笔不是自己敲的
+  const isAuto = t.source === 'notify';
 
   return (
     <li className="flex items-center justify-between py-2.5">
       <div className="min-w-0">
-        <p className="truncate text-sm text-ink-900">{label}</p>
+        <p className="truncate text-sm text-ink-900">
+          {isAuto && (
+            <span className="mr-1 rounded bg-blue-50 px-1 py-0.5 text-[10px] font-normal text-blue-700">
+              自动
+            </span>
+          )}
+          {label}
+        </p>
         <p className="text-xs text-ink-500">
           {t.occurred_day} · {t.account_name ?? ''}
           {t.category_name ? ` · ${t.category_name}` : ''}

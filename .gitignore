@@ -26,6 +26,7 @@ obj/
 *.jar
 *.apk
 *.aab
+*.tsbuildinfo
 
 # ---- 依赖 ----
 node_modules/

@@ -140,6 +140,59 @@ dashboardRoutes.get('/', async (c) => {
       .catch(() => ({ results: [] as unknown[] })),
   ]);
 
+  // ---- 通知自动记账状态（失败不影响主数据）----
+  // 三个数字决定 Dashboard 上是否出现横幅：
+  //   待确认笔数、未识别条数、采集链路是否断开
+  const [pendingCount, rawNewCount, lastBeat] = await Promise.all([
+    c.env.DB.prepare('SELECT COUNT(*) AS n FROM pending_txn')
+      .first<{ n: number }>()
+      .catch(() => null),
+    c.env.DB.prepare(
+      `SELECT COUNT(*) AS n FROM raw_notification WHERE status = 'new'`,
+    )
+      .first<{ n: number }>()
+      .catch(() => null),
+    c.env.DB.prepare(
+      `SELECT device_id, last_seen_at FROM device_heartbeat
+       ORDER BY last_seen_at DESC LIMIT 1`,
+    )
+      .first<{ device_id: string; last_seen_at: string }>()
+      .catch(() => null),
+  ]);
+
+  // 心跳超时阈值从配置读，读不到用 48 小时
+  let heartbeatTimeoutHours = 48;
+  try {
+    const cfg = await c.env.DB.prepare(
+      `SELECT value FROM app_config WHERE key = 'notify.heartbeat_timeout_hours'`,
+    ).first<{ value: string }>();
+    const n = Number(cfg?.value);
+    if (Number.isFinite(n) && n > 0) heartbeatTimeoutHours = n;
+  } catch {
+    // 保持默认值
+  }
+
+  let heartbeatAgeHours: number | null = null;
+  let notifyHealthy = true;
+  if (!lastBeat) {
+    notifyHealthy = false;
+  } else {
+    const lastMs = Date.parse(String(lastBeat.last_seen_at).replace(' ', 'T') + 'Z');
+    if (Number.isFinite(lastMs)) {
+      heartbeatAgeHours = Math.round(((Date.now() - lastMs) / 3_600_000) * 10) / 10;
+      if (heartbeatAgeHours > heartbeatTimeoutHours) notifyHealthy = false;
+    }
+  }
+
+  // 最近 5 分钟内自动记账的笔数，用于「刚自动记了 N 笔」的 toast
+  const autoRecent = await c.env.DB.prepare(
+    `SELECT COUNT(*) AS n FROM txn
+     WHERE source = 'notify' AND deleted_at IS NULL
+       AND created_at >= datetime('now', '-5 minutes')`,
+  )
+    .first<{ n: number }>()
+    .catch(() => null);
+
   return ok({
     month,
     day,
@@ -168,5 +221,15 @@ dashboardRoutes.get('/', async (c) => {
       done: videoCounts?.done ?? 0,
     },
     recent_workouts: workoutRecent?.results ?? [],
+    // 通知自动记账
+    notify: {
+      pending_count: pendingCount?.n ?? 0,
+      raw_new_count: rawNewCount?.n ?? 0,
+      healthy: notifyHealthy,
+      heartbeat_age_hours: heartbeatAgeHours,
+      heartbeat_timeout_hours: heartbeatTimeoutHours,
+      has_device: Boolean(lastBeat),
+      recent_auto_count: autoRecent?.n ?? 0,
+    },
   });
 });

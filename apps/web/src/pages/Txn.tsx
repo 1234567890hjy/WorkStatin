@@ -1,4 +1,5 @@
 import { useEffect, useMemo, useState } from 'react';
+import { useSearchParams } from 'react-router-dom';
 import { api, ApiError, type MonthlyStats, type ShareParse, type Txn } from '../api';
 import { formatYuanGrouped } from '../format';
 import CategoryBars from '../components/CategoryBars';
@@ -18,6 +19,7 @@ function monthOptions(n = 12): string[] {
 }
 
 export default function TxnPage({ data }: { data: AppData }) {
+  const [params] = useSearchParams();
   const [kind, setKind] = useState<Kind>('expense');
   const [amount, setAmount] = useState('');
   const [accountId, setAccountId] = useState<number>(data.accounts[0]?.id ?? 0);
@@ -47,6 +49,30 @@ export default function TxnPage({ data }: { data: AppData }) {
   useEffect(() => {
     setCategoryId(null);
   }, [kind]);
+
+  /**
+   * 从「未识别通知」跳过来时预填：/txn?raw=<id>
+   *
+   * 通知里的原文往往含金额，但解析器没把握。这里把原文原样放进备注，
+   * 让用户对着原文手填金额——比让他重新回忆「刚才花了多少」好得多。
+   */
+  const rawId = params.get('raw');
+  useEffect(() => {
+    if (!rawId) return;
+    api
+      .get<{ items: { id: number; title: string | null; body: string | null }[] }>(
+        '/notify/raw',
+      )
+      .then((r) => {
+        const hit = r.items.find((x) => String(x.id) === rawId);
+        if (!hit) return;
+        const text = [hit.title, hit.body].filter(Boolean).join(' / ');
+        if (text) setNote(text.slice(0, 500));
+      })
+      .catch(() => {
+        // 预填失败不影响手动记账
+      });
+  }, [rawId]);
 
   useEffect(() => {
     api

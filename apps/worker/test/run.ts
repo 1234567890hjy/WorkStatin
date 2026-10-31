@@ -20,6 +20,14 @@ import {
   normalizeCityName,
   sameArea,
 } from '../src/domain/geo.ts';
+import { parseNotification, detectChannel } from '../src/domain/notify-parse.ts';
+import {
+  dedupeVerdict,
+  notificationIdentity,
+  CHANNEL_PRIORITY,
+  DEFAULT_DEDUPE_WINDOW_MS,
+} from '../src/domain/notify-dedupe.ts';
+import type { DedupeExisting } from '../src/domain/notify-dedupe.ts';
 
 let passed = 0;
 let failed = 0;
@@ -622,6 +630,250 @@ test('geo: sameArea 同格判断', () => {
   assert.equal(sameArea(a, c), false);
   assert.equal(sameArea(a, null), false);
   assert.equal(sameArea(null, null), false);
+});
+
+// ============ notify-parse ============
+// 核心样本来自真实通知截图：标题「微信支付」+ 正文「已支付¥16.88」。
+// 这条通知没有商户，是决定整个置信度规则的关键样本。
+
+test('notify: 微信真实通知（无商户也判 high）', () => {
+  const r = parseNotification('微信支付', '已支付¥16.88');
+  assert.equal(r.ok, true);
+  if (!r.ok) return;
+  assert.equal(r.result.type, 'expense');
+  assert.equal(r.result.amountCents, 1688);
+  assert.equal(r.result.merchant, null);
+  assert.equal(r.result.channel, 'wechat');
+  // 关键：没有商户也要 high，否则自动记账退化成全量待确认
+  assert.equal(r.result.confidence, 'high');
+});
+
+test('notify: 整数金额', () => {
+  const r = parseNotification('微信支付', '已支付¥15');
+  assert.equal(r.ok, true);
+  if (!r.ok) return;
+  assert.equal(r.result.amountCents, 1500);
+});
+
+test('notify: 千分位金额', () => {
+  const r = parseNotification('微信支付', '已支付¥1,234.56');
+  assert.equal(r.ok, true);
+  if (!r.ok) return;
+  assert.equal(r.result.amountCents, 123456);
+});
+
+test('notify: 微信收款判 income', () => {
+  const r = parseNotification('微信支付', '已收款¥88.00');
+  assert.equal(r.ok, true);
+  if (!r.ok) return;
+  assert.equal(r.result.type, 'income');
+  assert.equal(r.result.amountCents, 8800);
+});
+
+test('notify: 微信退款判 income', () => {
+  const r = parseNotification('微信支付', '退款到账¥25.50');
+  assert.equal(r.ok, true);
+  if (!r.ok) return;
+  assert.equal(r.result.type, 'income');
+  assert.equal(r.result.amountCents, 2550);
+});
+
+test('notify: 支付宝付款成功', () => {
+  const r = parseNotification('支付宝', '付款成功 ¥11.20');
+  assert.equal(r.ok, true);
+  if (!r.ok) return;
+  assert.equal(r.result.channel, 'alipay');
+  assert.equal(r.result.amountCents, 1120);
+  assert.equal(r.result.confidence, 'high');
+});
+
+test('notify: 支付宝带商户', () => {
+  const r = parseNotification('支付宝', '向 瑞幸咖啡 付款 12.34 元');
+  assert.equal(r.ok, true);
+  if (!r.ok) return;
+  assert.equal(r.result.merchant, '瑞幸咖啡');
+  assert.equal(r.result.amountCents, 1234);
+});
+
+test('notify: 银行支出', () => {
+  const r = parseNotification('招商银行', '您账户于10月21日支出￥58.00');
+  assert.equal(r.ok, true);
+  if (!r.ok) return;
+  assert.equal(r.result.channel, 'bank');
+  assert.equal(r.result.amountCents, 5800);
+});
+
+test('notify: 银行入账判 income', () => {
+  const r = parseNotification('招商银行', '您账户入账￥1000.00');
+  assert.equal(r.ok, true);
+  if (!r.ok) return;
+  assert.equal(r.result.type, 'income');
+  assert.equal(r.result.amountCents, 100000);
+});
+
+test('notify: 验证码不记账', () => {
+  assert.equal(parseNotification('微信', '验证码 123456，5分钟内有效').ok, false);
+});
+
+test('notify: 营销推送不记账', () => {
+  assert.equal(parseNotification('支付宝', '点击查看优惠券活动').ok, false);
+});
+
+test('notify: 空通知', () => {
+  assert.equal(parseNotification('', '').ok, false);
+});
+
+test('notify: 超长文本拒绝', () => {
+  assert.equal(parseNotification('x', 'a'.repeat(3000)).ok, false);
+});
+
+test('notify: 卡号不被当成金额', () => {
+  assert.equal(parseNotification('招商银行', '您尾号4122的储蓄卡已绑定').ok, false);
+});
+
+test('notify: 退款无金额给出具体原因', () => {
+  const r = parseNotification('微信支付', '退款已受理，将原路退回');
+  assert.equal(r.ok, false);
+  if (r.ok) return;
+  assert.equal(r.reason, 'refund_without_amount');
+});
+
+test('notify: detectChannel', () => {
+  assert.equal(detectChannel('微信支付', '已支付¥1'), 'wechat');
+  assert.equal(detectChannel('支付宝', '付款成功'), 'alipay');
+  assert.equal(detectChannel('招商银行', '支出'), 'bank');
+  assert.equal(detectChannel('某App', '随便'), 'unknown');
+});
+
+test('notify: 未知渠道走通用层，无商户则 medium', () => {
+  const r = parseNotification('某记账App', '消费 ¥9.90');
+  assert.equal(r.ok, true);
+  if (!r.ok) return;
+  assert.equal(r.result.channel, 'unknown');
+  assert.equal(r.result.confidence, 'medium');
+});
+
+// ============ notify-dedupe ============
+const DT0 = 1_700_000_000_000;
+
+function dedupeRow(over: Partial<DedupeExisting> = {}): DedupeExisting {
+  return {
+    id: 1,
+    kind: 'txn',
+    amountCents: 1688,
+    merchant: null,
+    atMs: DT0,
+    channel: 'bank',
+    ...over,
+  };
+}
+
+test('dedupe: 微信 vs 银行同额同窗 → 替换旧的', () => {
+  const v = dedupeVerdict(
+    { amountCents: 1688, merchant: null, atMs: DT0, channel: 'wechat' },
+    [dedupeRow({ channel: 'bank' })],
+  );
+  assert.equal(v.kind, 'replace_old');
+});
+
+test('dedupe: 已有微信新来银行 → 丢弃新的', () => {
+  const v = dedupeVerdict(
+    { amountCents: 1688, merchant: null, atMs: DT0, channel: 'bank' },
+    [dedupeRow({ channel: 'wechat' })],
+  );
+  assert.equal(v.kind, 'drop_new');
+});
+
+test('dedupe: 同渠道同额同窗 → 丢弃新的', () => {
+  const v = dedupeVerdict(
+    { amountCents: 1688, merchant: null, atMs: DT0, channel: 'wechat' },
+    [dedupeRow({ channel: 'wechat' })],
+  );
+  assert.equal(v.kind, 'drop_new');
+});
+
+test('dedupe: 金额不同 → 两笔都记', () => {
+  const v = dedupeVerdict(
+    { amountCents: 1500, merchant: null, atMs: DT0, channel: 'wechat' },
+    [dedupeRow({ amountCents: 1688 })],
+  );
+  assert.equal(v.kind, 'unique');
+});
+
+test('dedupe: 超窗 → 两笔都记', () => {
+  const v = dedupeVerdict(
+    { amountCents: 1688, merchant: null, atMs: DT0 + 61_000, channel: 'wechat' },
+    [dedupeRow({ atMs: DT0 })],
+  );
+  assert.equal(v.kind, 'unique');
+});
+
+test('dedupe: 窗口边界正好 60 秒 → 视为重复', () => {
+  const v = dedupeVerdict(
+    { amountCents: 1688, merchant: null, atMs: DT0 + 60_000, channel: 'wechat' },
+    [dedupeRow({ atMs: DT0, channel: 'wechat' })],
+  );
+  assert.equal(v.kind, 'drop_new');
+});
+
+test('dedupe: 新记录带商户 → 不参与去重', () => {
+  const v = dedupeVerdict(
+    { amountCents: 1500, merchant: '瑞幸', atMs: DT0, channel: 'wechat' },
+    [dedupeRow({ amountCents: 1500, merchant: null })],
+  );
+  assert.equal(v.kind, 'unique');
+});
+
+test('dedupe: 已有记录带商户 → 不认为是同一笔', () => {
+  const v = dedupeVerdict(
+    { amountCents: 1500, merchant: null, atMs: DT0, channel: 'wechat' },
+    [dedupeRow({ amountCents: 1500, merchant: '星巴克' })],
+  );
+  assert.equal(v.kind, 'unique');
+});
+
+test('dedupe: 空列表 → unique', () => {
+  const v = dedupeVerdict(
+    { amountCents: 1688, merchant: null, atMs: DT0, channel: 'wechat' },
+    [],
+  );
+  assert.equal(v.kind, 'unique');
+});
+
+test('dedupe: 多条候选取时间最近', () => {
+  const v = dedupeVerdict(
+    { amountCents: 1688, merchant: null, atMs: DT0 + 1000, channel: 'wechat' },
+    [
+      dedupeRow({ id: 10, atMs: DT0 - 30_000, channel: 'bank' }),
+      dedupeRow({ id: 11, atMs: DT0 + 500, channel: 'bank' }),
+    ],
+  );
+  assert.equal(v.kind, 'replace_old');
+  if (v.kind !== 'replace_old') return;
+  assert.equal(v.duplicateOf.id, 11);
+});
+
+test('dedupe: 幂等键同通知相同', () => {
+  const a = notificationIdentity({ pkg: 'com.tencent.mm', title: '微信支付', body: '已支付¥16.88', postTime: DT0 });
+  const b = notificationIdentity({ pkg: 'com.tencent.mm', title: '微信支付', body: '已支付¥16.88', postTime: DT0 });
+  assert.equal(a, b);
+});
+
+test('dedupe: postTime 不同则身份串不同', () => {
+  const a = notificationIdentity({ pkg: 'p', title: 't', body: 'b', postTime: DT0 });
+  const b = notificationIdentity({ pkg: 'p', title: 't', body: 'b', postTime: DT0 + 1000 });
+  assert.notEqual(a, b);
+});
+
+test('dedupe: 缺字段不抛异常', () => {
+  assert.equal(typeof notificationIdentity({}), 'string');
+});
+
+test('dedupe: 渠道优先级与默认窗口', () => {
+  assert.ok(CHANNEL_PRIORITY.wechat < CHANNEL_PRIORITY.alipay);
+  assert.ok(CHANNEL_PRIORITY.alipay < CHANNEL_PRIORITY.bank);
+  assert.ok(CHANNEL_PRIORITY.bank < CHANNEL_PRIORITY.unknown);
+  assert.equal(DEFAULT_DEDUPE_WINDOW_MS, 60_000);
 });
 
 // ============ 汇总 ============

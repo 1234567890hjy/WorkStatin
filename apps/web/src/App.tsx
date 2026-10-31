@@ -11,6 +11,7 @@ import VideoPage from './pages/Video';
 import TaskPage from './pages/Task';
 import RoutinePage from './pages/Routine';
 import SearchPage from './pages/Search';
+import NotifyPage from './pages/Notify';
 
 export interface AppData {
   accounts: Account[];
@@ -80,6 +81,7 @@ export default function App() {
           <Route path="/tasks" element={<TaskPage data={data} />} />
           <Route path="/routines" element={<RoutinePage data={data} />} />
           <Route path="/search" element={<SearchPage />} />
+          <Route path="/notify" element={<NotifyPage data={data} />} />
           <Route path="/share" element={<SharePage data={data} />} />
           <Route path="/settings" element={<SettingsPage data={data} />} />
           <Route path="*" element={<Navigate to="/" replace />} />

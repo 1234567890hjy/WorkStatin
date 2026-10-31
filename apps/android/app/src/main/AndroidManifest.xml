@@ -1,0 +1,52 @@
+<?xml version="1.0" encoding="utf-8"?>
+<manifest xmlns:android="http://schemas.android.com/apk/res/android"
+    package="me.workstation.notify">
+
+    <uses-permission android:name="android.permission.INTERNET" />
+    <uses-permission android:name="android.permission.ACCESS_NETWORK_STATE" />
+    <uses-permission android:name="android.permission.RECEIVE_BOOT_COMPLETED" />
+
+    <application
+        android:label="工作台通知采集"
+        android:icon="@android:drawable/sym_def_app_icon"
+        android:allowBackup="false"
+        android:debuggable="true"
+        android:usesCleartextTraffic="true"
+        android:theme="@android:style/Theme.Material.Light">
+
+        <!-- 通知监听服务：系统的 NotificationListenerService -->
+        <service
+            android:name=".NotifyListenerService"
+            android:exported="true"
+            android:label="工作台通知采集"
+            android:permission="android.permission.BIND_NOTIFICATION_LISTENER_SERVICE">
+            <intent-filter>
+                <action android:name="android.service.notification.NotificationListenerService" />
+            </intent-filter>
+        </service>
+
+        <!-- 上传队列：AlarmManager 兜底重试 -->
+        <receiver
+            android:name=".RetryReceiver"
+            android:exported="false" />
+
+        <!-- 调试注入：adb 广播即可模拟一条通知，便于自动化验证 -->
+        <receiver
+            android:name=".DebugReceiver"
+            android:exported="true">
+            <intent-filter>
+                <action android:name="me.workstation.notify.DEBUG_INJECT" />
+            </intent-filter>
+        </receiver>
+
+        <activity
+            android:name=".SetupActivity"
+            android:exported="true"
+            android:label="工作台通知采集">
+            <intent-filter>
+                <action android:name="android.intent.action.MAIN" />
+                <category android:name="android.intent.category.LAUNCHER" />
+            </intent-filter>
+        </activity>
+    </application>
+</manifest>

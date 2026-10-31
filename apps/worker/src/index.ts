@@ -12,6 +12,8 @@ import { llmRoutes } from './routes/llm.ts';
 import { taskRoutes } from './routes/task.ts';
 import { routineRoutes } from './routes/routine.ts';
 import { searchRoutes } from './routes/search.ts';
+import { notifyRoutes } from './routes/notify.ts';
+import { devRoutes } from './routes/dev.ts';
 import { err } from './http.ts';
 
 const app = new Hono<{ Bindings: Env }>();
@@ -33,6 +35,12 @@ app.route('/api/llm', llmRoutes);
 app.route('/api/tasks', taskRoutes);
 app.route('/api/routines', routineRoutes);
 app.route('/api/search', searchRoutes);
+
+// ---- 通知自动记账（APK 上报）----
+app.route('/api/notify', notifyRoutes);
+
+// ---- 本地开发初始化（生产环境自动 404）----
+app.route('/api/dev', devRoutes);
 
 app.notFound((c) => err('NOT_FOUND', `未找到路由 ${c.req.path}`, 404));
 

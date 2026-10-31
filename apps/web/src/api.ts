@@ -172,6 +172,72 @@ export interface Dashboard {
   // P1
   video_stats: { pending: number; done: number };
   recent_workouts: Workout[];
+  // 通知自动记账
+  notify?: NotifyStatus;
+}
+
+// ---------- 通知自动记账 ----------
+
+export interface NotifyStatus {
+  pending_count: number;
+  raw_new_count: number;
+  healthy: boolean;
+  heartbeat_age_hours: number | null;
+  heartbeat_timeout_hours: number;
+  has_device: boolean;
+  recent_auto_count: number;
+}
+
+/** GET /notify/health 的原始形状（APK 与设置页共用） */
+export interface NotifyHealth {
+  healthy: boolean;
+  warning: string | null;
+  heartbeat_age_hours: number | null;
+  heartbeat_timeout_hours: number;
+  device: {
+    device_id: string;
+    last_seen_at: string;
+    sent_total: number;
+    queue_depth: number;
+    app_version: string | null;
+  } | null;
+  last_notify_txn_at: string | null;
+  notify_txn_total: number;
+  pending_count: number;
+  raw_new_count: number;
+}
+
+export type NotifyChannel = 'wechat' | 'alipay' | 'bank' | 'unknown';
+
+export interface PendingTxn {
+  id: number;
+  type: 'expense' | 'income';
+  amount_cents: number;
+  account_id: number | null;
+  category_id: number | null;
+  merchant: string | null;
+  note: string | null;
+  occurred_at: string;
+  occurred_day: string;
+  occurred_month: string;
+  channel: NotifyChannel;
+  confidence: 'medium' | 'low';
+  matched: string | null;
+  created_at: string;
+  account_name?: string | null;
+  category_name?: string | null;
+}
+
+export interface RawNotification {
+  id: number;
+  channel: NotifyChannel;
+  pkg: string | null;
+  title: string | null;
+  body: string | null;
+  posted_at: string | null;
+  received_at: string;
+  status: 'new' | 'ignored' | 'recorded';
+  reason: string | null;
 }
 
 export interface ShareParse {
